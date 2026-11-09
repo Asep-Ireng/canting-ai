@@ -1,0 +1,12 @@
+# secrets: the Gemini API key lives here and must never be committed
+.env
+*.env
+.env.*
+!.env.example
+
+# generated images, SQLite database
+data/
+
+__pycache__/
+*.pyc
+.venv/
