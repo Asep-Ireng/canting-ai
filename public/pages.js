@@ -111,7 +111,7 @@ pages.architecture = {
     const v5 = batikSVG({...base,colors:PALETTES.soga.c,scale:.55},{size:300,extra:wmx});
     const S = [
       {vis:`<div class="vis txt">${L('Template + teks + foto + sketsa','Template + text + photo + sketch')}</div>`,
-       t:L('Masukan & template','Input & template'), tech:L('Frontend → FastAPI · pustaka template (SQLite)','Frontend → FastAPI · template library (SQLite)'),
+       t:L('Masukan & template','Input & template'), tech:L('Frontend → FastAPI (Vercel) · template di browser','Frontend → FastAPI (Vercel) · templates in the browser'),
        b:[L('Template bawaan + buatan pengguna','Built-in + user-made templates'),L('Gambar acuan & sketsa marker (canvas)','Reference images & marker sketch (canvas)'),L('Prompt terstruktur per motif & palet','Structured prompt per motif & palette')],
        use:['studio',L('Studio AI','AI Studio')]},
       {vis:`<div class="vis">${v2}</div>`,
@@ -151,13 +151,13 @@ pages.architecture = {
         <div class="card box"><h4>${L('Stack saat ini','Current stack')}</h4>
           <div class="pillrow">
             <span class="pill now">HTML · CSS · JavaScript</span><span class="pill now">Python · FastAPI</span>
-            <span class="pill now">Gemini API (google-genai)</span><span class="pill now">SQLite + ${L('file PNG','PNG files')}</span>
+            <span class="pill now">Gemini API (google-genai)</span><span class="pill now">IndexedDB ${L('(penyimpanan browser)','(browser storage)')}</span><span class="pill now">Vercel</span>
             <span class="pill">${L('Rencana: watermark tak terlihat, deteksi jiplakan, LoRA/ControlNet','Planned: invisible watermark, copy detection, LoRA/ControlNet')}</span>
           </div></div>
         <div class="card box"><h4>${L('Pagar etika','Guardrails')}</h4>
           <div class="pillrow">
             <span class="pill g">${ico('check',13)} ${L('Catatan budaya = panduan','Cultural notes = guidance')}</span>
-            <span class="pill g">${ico('check',13)} ${L('API key hanya di server','API key stays on the server')}</span>
+            <span class="pill g">${ico('check',13)} ${L('API key milik pengguna, tidak disimpan di server','Users bring their own API key; nothing stored on the server')}</span>
             <span class="pill g">${ico('check',13)} ${L('Pengrajin tetap pengambil keputusan','The artisan stays the decision-maker')}</span>
           </div></div>
       </div>
@@ -177,7 +177,7 @@ pages.dashboard = {
       <div class="card stat"><small>${L('Tersimpan di koleksi','Saved in collection')}</small><b>${state.designs.length}</b><span class="d">${prot} ${L('dilindungi','protected')}</span></div>
       <div class="card stat"><small>${L('Template milikmu','Your templates')}</small><b>${mine.length}</b><span class="d" style="color:var(--muted)">+ ${state.templates.length-mine.length} ${L('bawaan','built-in')}</span></div>
       <div class="card stat"><small>${L('Gambar AI dibuat','AI images made')}</small><b>${st.images}</b><span class="d" style="color:${st.failed?'var(--warn)':'var(--muted)'}">${st.failed||0} ${L('gagal','failed')}</span></div>
-      <div class="card stat"><small>${L('Rata-rata waktu generate','Avg. generation time')}</small><b>${st.avg_ms?(st.avg_ms/1000).toFixed(1)+'s':'–'}</b><span class="d" style="color:var(--muted)">${st.mock?L('mode mock','mock mode'):'Gemini'}</span></div>
+      <div class="card stat"><small>${L('Rata-rata waktu generate','Avg. generation time')}</small><b>${st.avg_ms?(st.avg_ms/1000).toFixed(1)+'s':'–'}</b><span class="d" style="color:var(--muted)">${aiMode()==='mock'?L('mode mock','mock mode'):'Gemini'}</span></div>
     </div>
     <div class="dash2">
       <div>
@@ -226,10 +226,10 @@ function resultDesign(r, i){
   const palLabel = s.pal!=='auto' ? tr(PALETTES[s.pal].label).split(' ')[0] : '';
   const base = tpl ? tpl.name : (s.sketch ? L('Sketsa','Sketch') : L('Desain baru','New design'));
   const fl = s.format!=='tile' ? ' '+tr(FORMATS[s.format].label) : '';
-  return {id:null, name:`${base}${fl}${palLabel?' '+palLabel:''} · ${'ABCD'[i]}`, image:r.url, image_id:r.image_id, format:s.format, w:r.w, h:r.h,
+  return {id:null, name:`${base}${fl}${palLabel?' '+palLabel:''} · ${'ABCD'[i]}`, image:r.data, format:s.format, w:r.w, h:r.h,
     template_id: tpl ? tpl.id : null, style: tpl && STYLES[tpl.id] ? tpl.id : null, pal:s.pal,
     scale:1, rotation:0, mirror:false, adjust:{...DEFAULT_ADJ}, protected:false, date:today(), prompt:s.prompt,
-    versions:[{image:r.url, image_id:r.image_id}], vi:0, ms:r.ms, mock:r.mock, model:r.model};
+    versions:[{image:r.data, w:r.w, h:r.h}], vi:0, ms:r.ms, mock:r.mock, model:r.model};
 }
 pages.studio = {
   html(){
@@ -264,7 +264,7 @@ pages.studio = {
           <label class="lbl">${L('Resolusi','Resolution')}</label>${sizePicker()}
           <p class="hint" style="margin-top:6px">${L('1K untuk layar; 2K/4K untuk cetak kain. Makin besar makin lama (4K sekitar 30–40 dtk) dan biasanya makin mahal.','1K for screens; 2K/4K for printing cloth. Bigger takes longer (4K about 30–40 s) and usually costs more.')}</p>` : ''}
         <button class="btn primary block" id="gen" style="margin-top:22px" ${s.status==='loading'?'disabled':''}>${ico('sparkle')} ${L(`Generate ${s.count} variasi`,`Generate ${s.count} variation${s.count>1?'s':''}`)}</button>
-        <p class="hint" style="margin-top:8px;text-align:center">${state.status.mock?L('Mode mock: gambar contoh, tanpa biaya.','Mock mode: sample images, no cost.'):L(`Memakai ${s.count} panggilan gambar Gemini.`,`Uses ${s.count} Gemini image call${s.count>1?'s':''}.`)}</p>
+        <p class="hint" style="margin-top:8px;text-align:center">${aiMode()==='mock'?L('Mode mock: gambar contoh, tanpa biaya. Masukkan API key untuk hasil asli.','Mock mode: sample images, no cost. Add an API key for real results.'):L(`Memakai ${s.count} panggilan gambar Gemini.`,`Uses ${s.count} Gemini image call${s.count>1?'s':''}.`)}</p>
       </section>
       <section class="results" id="results"></section>
     </div>`;
@@ -313,10 +313,11 @@ async function runGenerate(){
   s.results=Array.from({length:s.count},()=>({status:'pending'}));
   const btn=$('#gen'); if(btn) btn.disabled=true;
   renderResults();
-  const body={prompt:s.prompt, template_id:tpl?tpl.id:null, palette:s.pal==='auto'?null:s.pal, density:s.density, format:s.format, references:s.refs, sketch:s.sketch, model:state.aiModel, size:state.aiSize};
+  const body={prompt:s.prompt, template_id:tpl&&tpl.builtin?tpl.id:null,
+    template: tpl&&!tpl.builtin ? {name:tpl.name, description:tpl.description, palette:tpl.palette||null, refs:(tpl.ref_images||[]).slice(0,3)} : null, palette:s.pal==='auto'?null:s.pal, density:s.density, format:s.format, references:s.refs, sketch:s.sketch, model:state.aiModel, size:state.aiSize};
   await Promise.all(s.results.map(async (slot,i)=>{
-    try{ const r=await api('/api/generate',{...body, variation:i}); slot.status='done'; slot.d=resultDesign(r,i); }
-    catch(e){ slot.status='error'; slot.error=e.message; }
+    try{ const r=await api('/api/generate',{...body, variation:i}); slot.status='done'; slot.d=resultDesign(r,i); logGen(r.ms, true); }
+    catch(e){ slot.status='error'; slot.error=e.message; logGen(0, false); }
     renderSlot(i, true);
   }));
   s.status='done'; s.elapsed=(performance.now()-s.t0)/1000;
@@ -371,7 +372,7 @@ pages.templates = {
   html(){
     const builtin=state.templates.filter(t=>t.builtin), mine=state.templates.filter(t=>!t.builtin);
     const card=t=>`<div class="card tcard">${tplThumb(t,300)}
-      ${t.ref_images.length>1?`<div class="refs">${t.ref_images.slice(1).map(id=>`<img src="/images/${esc(id)}.png" alt="">`).join('')}</div>`:''}
+      ${t.ref_images.length>1?`<div class="refs">${t.ref_images.slice(1).map(src=>`<img src="${esc(src)}" alt="">`).join('')}</div>`:''}
       <h4>${esc(t.name)} ${t.builtin?`<span class="tag">${L('Bawaan','Built-in')}</span>`:''}</h4>
       <p>${esc(t.builtin && t.meaning ? tr(t.meaning) : t.description)}</p>
       <div class="row"><button class="btn primary sm" data-use="${esc(t.id)}">${ico('sparkle',15)} ${L('Pakai','Use')}</button>
@@ -393,7 +394,7 @@ pages.templates = {
     $$('[data-dup]').forEach(b=>b.addEventListener('click',()=>{ const t=tplById(b.dataset.dup);
       templateModal({name:`${t.name} ${L('Gaya Baru','New Style')}`, description:`${t.description}\n${L('Variasi','Twist')}: `, palette:t.palette, origin:tr(t.origin)||'', meaning:tr(t.meaning)||''},{onSaved:()=>go()}); }));
     $$('[data-edit]').forEach(b=>b.addEventListener('click',()=>{ const t=tplById(b.dataset.edit);
-      templateModal({id:t.id, name:t.name, description:t.description, palette:t.palette||'', origin:tr(t.origin)||'', meaning:tr(t.meaning)||'', ref_image_ids:t.ref_images},{onSaved:()=>go()}); }));
+      templateModal({id:t.id, name:t.name, description:t.description, palette:t.palette||'', origin:tr(t.origin)||'', meaning:tr(t.meaning)||'', ref_images:t.ref_images},{onSaved:()=>go()}); }));
     $$('[data-delt]').forEach(b=>b.addEventListener('click',async()=>{ if(await deleteTemplate(b.dataset.delt)) go(); }));
   }
 };
@@ -488,7 +489,7 @@ pages.editor = {
     $('#rt').addEventListener('input',e=>{ d.rotation=+e.target.value; redrawArt(); });
     $('#mir').addEventListener('change',e=>{ d.mirror=e.target.checked; redrawArt(); });
     $('#wob')?.addEventListener('change',e=>{ d.wobble=e.target.checked; redrawArt(); });
-    $$('[data-ver]').forEach(b=>b.addEventListener('click',()=>{ const v=d.versions[+b.dataset.ver]; d.vi=+b.dataset.ver; d.image=v.image; d.image_id=v.image_id; if(v.w){ d.w=v.w; d.h=v.h; } go(); }));
+    $$('[data-ver]').forEach(b=>b.addEventListener('click',()=>{ const v=d.versions[+b.dataset.ver]; d.vi=+b.dataset.ver; d.image=v.image; if(v.w){ d.w=v.w; d.h=v.h; } go(); }));
     $$('[data-ai]').forEach(b=>b.addEventListener('click',()=>{ $('#ai-text').value=b.dataset.ai; }));
     bindModelSelect();
     $('#ai-go').addEventListener('click',()=>aiEdit($('#ai-text').value));
@@ -508,23 +509,24 @@ async function aiEdit(txt){
   try{
     // what the AI sees = the raw design with colour adjustments baked in
     const baked = !d.image || hasAdj(d.adjust);
-    let image_id = d.image_id;
+    let image_data;
     if(baked){
       const cv=await svgToCanvas(rawSVG(d,1024),1024,Math.round(1024/arOf(d)));
-      const up=await api('/api/images',{data:cv.toDataURL('image/png')});
-      image_id=up.image_id; d.w=d.w||up.w; d.h=d.h||up.h;
-      if(!d.versions || !d.versions.length){ d.versions=[{image:up.url,image_id}]; d.vi=0; }
-    }
+      image_data=cv.toDataURL('image/jpeg',.92);
+      if(!d.versions || !d.versions.length){ d.versions=[{image:image_data, w:cv.width, h:cv.height}]; d.vi=0; }
+    } else image_data=await shrinkDataURL(d.image, 1536, .92);  // the server shrinks inputs anyway; this keeps the request small
     let annotation=null;
     if(marked){
       const cv=await svgToCanvas(rawSVG(d,1024),1024,ed.pad.cv.height);
       cv.getContext('2d').drawImage(ed.pad.cv,0,0,cv.width,cv.height);
-      annotation=cv.toDataURL('image/png');
+      annotation=cv.toDataURL('image/jpeg',.9);
     }
-    const r=await api('/api/edit',{instruction:txt,image_id,annotation,format:d.format||'tile',model:state.aiModel});
+    const long = Math.max(d.w||1024, d.h||1024), size = long>=3000 ? '4K' : long>=1500 ? '2K' : '1K';  // keep the original resolution
+    const r=await api('/api/edit',{instruction:txt,image_data,annotation,format:d.format||'tile',model:state.aiModel,size});
+    logGen(r.ms, true);
     if(!d.image){ d.scale=1; d.rotation=0; d.mirror=false; }  // procedural transforms are baked into the edited image
-    d.versions=(d.versions||[]).slice(0,(d.vi??0)+1).concat({image:r.url,image_id:r.image_id,w:r.w,h:r.h}); d.vi=d.versions.length-1;
-    d.image=r.url; d.image_id=r.image_id; d.w=r.w; d.h=r.h; d.adjust={...DEFAULT_ADJ}; d.mock=r.mock; d.model=r.model;
+    d.versions=(d.versions||[]).slice(0,(d.vi??0)+1).concat({image:r.data,w:r.w,h:r.h}); d.vi=d.versions.length-1;
+    d.image=r.data; d.w=r.w; d.h=r.h; d.adjust={...DEFAULT_ADJ}; d.mock=r.mock; d.model=r.model;
     ed.mark=false; ed.pad=null; pages.editor._txt='';
     toast(L(`AI selesai mengedit (${(r.ms/1000).toFixed(1)} dtk)`,`AI edit done (${(r.ms/1000).toFixed(1)} s)`));
     refreshStatus();
@@ -669,7 +671,8 @@ pages.mockup = {
     $('#cap-t').addEventListener('input',e=>{ $('#ph-cap').textContent=e.target.value; });
     $('#cap-gen').addEventListener('click',async()=>{
       const b=$('#cap-gen'); b.disabled=true; b.innerHTML=ico('sparkle',15)+' '+L('Menulis…','Writing…');
-      try{ const r=await api('/api/caption',{name:dn(d), template_id:d.template_id||d.style||null, product:tr(PRODUCTS[kind].label), brand:UMKM, lang});
+      try{ const t=tplById(d.template_id||d.style);
+        const r=await api('/api/caption',{name:dn(d), motif:t?t.name:'batik', origin:t&&t.origin?tr(t.origin):'', meaning:t&&t.meaning?tr(t.meaning):'', product:tr(PRODUCTS[kind].label), brand:UMKM, lang});
         $('#cap-t').value=r.text; $('#ph-cap').textContent=r.text; toast(L('Caption ditulis oleh AI','Caption written by AI')); }
       catch(e){ toast(e.message,true); }
       finally{ b.disabled=false; b.innerHTML=ico('sparkle',15)+' '+L('Tulis dengan AI','Write with AI'); }
@@ -714,6 +717,8 @@ function go(){
   if(go._last===route) $('.content')?.classList.add('still');
   go._last = route;
   page.bind && page.bind();
+  let asked=true; try{ asked=!!localStorage.getItem('canting-key-asked'); }catch(e){}
+  if(!page.public && !asked && aiMode()==='mock' && !$('.modal-bg')) keyModal({onSaved:()=>refreshStatus().then(go)});
 }
 function nav(r){
   route = r;
@@ -721,6 +726,7 @@ function nav(r){
   go(); window.scrollTo(0,0);
 }
 document.addEventListener('click',e=>{
+  if(e.target.closest('[data-keybtn]')){ keyModal({onSaved:()=>refreshStatus().then(go)}); return; }
   const lb=e.target.closest('[data-lang]');
   if(lb){
     lang=lb.dataset.lang; document.documentElement.lang=lang;

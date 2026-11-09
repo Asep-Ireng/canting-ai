@@ -209,8 +209,13 @@ function productSVG(kind, d, bg, mul){
 }
 
 /* ---------- API ---------- */
-async function api(path, body, method){
+/* The visitor's own Gemini key: kept only in this browser, sent with each request, never stored on the server. */
+const KEY_LS = 'canting-gemini-key';
+const getKey = () => { try{ return localStorage.getItem(KEY_LS) || ''; }catch(e){ return ''; } };
+const setKey = k => { try{ k ? localStorage.setItem(KEY_LS, k) : localStorage.removeItem(KEY_LS); }catch(e){} };
+async function api(path, body, method, key=getKey()){
   const opt = {method: method || (body===undefined ? 'GET' : 'POST'), headers:{}};
+  if(key) opt.headers['X-Gemini-Key'] = key;
   if(body!==undefined){ opt.headers['Content-Type']='application/json'; opt.body=JSON.stringify(body); }
   let res;
   try{ res = await fetch(path, opt); }
@@ -222,6 +227,35 @@ async function api(path, body, method){
   }
   return data;
 }
+
+/* ---------- browser storage: designs and custom templates stay on this device ---------- */
+let _idb;
+function idb(){
+  return _idb ||= new Promise((res, rej)=>{
+    const r = indexedDB.open('canting-ai', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('designs', {keyPath:'id'}); r.result.createObjectStore('templates', {keyPath:'id'}); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function idbDo(store, mode, fn){
+  const db = await idb();
+  return new Promise((res, rej)=>{ const tx=db.transaction(store, mode), q=fn(tx.objectStore(store)); tx.oncomplete=()=>res(q && q.result); tx.onerror=()=>rej(tx.error); });
+}
+const idbAll = store => idbDo(store, 'readonly', st=>st.getAll());
+const idbPut = (store, obj) => idbDo(store, 'readwrite', st=>st.put(obj));
+const idbDel = (store, id) => idbDo(store, 'readwrite', st=>st.delete(id));
+const newId = p => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+
+/* generation timings, kept per browser for the dashboard (the server keeps nothing) */
+const LOG_LS = 'canting-genlog';
+function logGen(ms, ok){ try{ const l=JSON.parse(localStorage.getItem(LOG_LS)||'[]'); l.push({ms, ok}); localStorage.setItem(LOG_LS, JSON.stringify(l.slice(-500))); }catch(e){} }
+function localStats(){
+  let l=[]; try{ l=JSON.parse(localStorage.getItem(LOG_LS)||'[]'); }catch(e){}
+  const ok=l.filter(x=>x.ok);
+  return {images: ok.length, failed: l.length-ok.length, avg_ms: ok.length ? Math.round(ok.reduce((a,x)=>a+x.ms,0)/ok.length) : 0};
+}
+/* 'own' = visitor's key, 'server' = key set on the server (local dev), 'mock' = no key, sample images */
+const aiMode = () => getKey() ? 'own' : (state.status.server_key ? 'server' : 'mock');
 
 /* ---------- state ---------- */
 const UMKM = 'Batik Laras Ayu';
@@ -237,7 +271,7 @@ const dn = d => tr(d.name) || L('Tanpa nama','Untitled');
 function sampleDesign(){
   return {id:null, name:{id:'Kawung Indigo (contoh)',en:'Indigo Kawung (sample)'}, style:'kawung', template_id:'kawung', pal:'indigo', colors:{...PALETTES.indigo.c}, scale:1, rotation:0, mirror:false, wobble:true, seed:7, adjust:{...DEFAULT_ADJ}, protected:false, date:today()};
 }
-async function refreshStatus(){ try{ state.status = await api('/api/status'); }catch(e){} }
+async function refreshStatus(){ try{ state.status = {...await api('/api/status'), ...localStats()}; }catch(e){ Object.assign(state.status, localStats()); } }
 /* ---------- image model picker (choices come from the backend's IMAGE_MODELS) ---------- */
 const imageModels = () => state.status.image_models || [];
 const modelLabel = id => (imageModels().find(m=>m.id===id) || {}).label || id || '';
@@ -270,10 +304,12 @@ function bindModelSelect(root=document){
   }));
 }
 async function loadAll(){
-  const [st, tp, ds] = await Promise.allSettled([api('/api/status'), api('/api/templates'), api('/api/designs')]);
-  if(st.status==='fulfilled') state.status=st.value;
-  if(tp.status==='fulfilled') state.templates=tp.value;
-  if(ds.status==='fulfilled') state.designs=ds.value;
+  const [st, tp, mine, ds] = await Promise.allSettled([api('/api/status'), api('/api/templates'), idbAll('templates'), idbAll('designs')]);
+  if(st.status==='fulfilled') state.status={...st.value, ...localStats()};
+  const builtin = tp.status==='fulfilled' ? tp.value : [];
+  const own = mine.status==='fulfilled' ? mine.value.sort((a,b)=>(a.created||0)-(b.created||0)) : [];
+  state.templates = [...builtin, ...own];
+  if(ds.status==='fulfilled') state.designs = ds.value.sort((a,b)=>(b.updated||0)-(a.updated||0));
   if(st.status==='rejected') toast(st.reason.message, true);
   initModel();
   state.current = state.designs[0] ? structuredClone(state.designs[0]) : sampleDesign();
@@ -291,7 +327,9 @@ function toast(msg, err=false){
 async function saveDesign(d, quiet=false){
   const copy = structuredClone(d); copy.date = copy.date || today();
   try{
-    const saved = await api('/api/designs', copy);
+    copy.id = copy.id || newId('dsn'); copy.updated = Date.now();
+    await idbPut('designs', copy);
+    const saved = copy;
     d.id = saved.id;
     const i = state.designs.findIndex(x=>x.id===saved.id);
     if(i>=0) state.designs[i]=saved; else state.designs.unshift(saved);
@@ -300,7 +338,7 @@ async function saveDesign(d, quiet=false){
   }catch(e){ toast(e.message, true); }
 }
 async function deleteDesign(id){
-  await api('/api/designs/'+id, undefined, 'DELETE');
+  await idbDel('designs', id);
   state.designs = state.designs.filter(x=>x.id!==id);
 }
 function openEditor(d){ state.current = structuredClone(d); nav('editor'); }
@@ -345,6 +383,14 @@ function fileToDataURL(file, max=1024){
     }; img.onerror=rej; img.src=fr.result; };
     fr.onerror=rej; fr.readAsDataURL(file);
   });
+}
+/* Re-encode an image (data URL) to at most maxPx on its long side, as JPEG, to keep requests small. */
+function shrinkDataURL(src, maxPx=1536, quality=.9){
+  return new Promise((res, rej)=>{ const img=new Image(); img.onload=()=>{
+    const k=Math.min(1, maxPx/Math.max(img.width, img.height));
+    const cv=document.createElement('canvas'); cv.width=Math.round(img.width*k); cv.height=Math.round(img.height*k);
+    const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height); c.drawImage(img,0,0,cv.width,cv.height);
+    res(cv.toDataURL('image/jpeg', quality)); }; img.onerror=rej; img.src=src; });
 }
 async function sha256Hex(data){
   const buf = typeof data==='string' ? new TextEncoder().encode(data) : data;
@@ -460,15 +506,15 @@ function sketchModal(prevStrokes){
 /* ---------- templates ---------- */
 function tplThumb(t, size=160){
   if(!t) return `<div class="svgbox">${batikSVG({style:'kawung',colors:PALETTES.soga.c,scale:.6,seed:3,wobble:false},{size})}</div>`;
-  if(t.ref_images && t.ref_images.length) return `<div class="svgbox"><img src="/images/${esc(t.ref_images[0])}.png" alt="" loading="lazy"></div>`;
+  if(t.ref_images && t.ref_images.length) return `<div class="svgbox"><img src="${esc(t.ref_images[0])}" alt="" loading="lazy"></div>`;
   const style = STYLES[t.id] ? t.id : 'kawung';
   const pal = PALETTES[t.palette] ? t.palette : 'soga';
   return `<div class="svgbox">${batikSVG({style,colors:PALETTES[pal].c,scale:.6,rotation:0,seed:3,wobble:false},{size})}</div>`;
 }
-/* Create / edit template. prefill: {id?, name, description, palette, origin, meaning, ref_image_ids:[], ref_image_data:[]} */
+/* Create / edit template (saved in this browser). prefill: {id?, name, description, palette, origin, meaning, ref_images:[data URLs]} */
 function templateModal(prefill={}, {onSaved}={}){
   const editing = !!prefill.id;
-  const refs = [...(prefill.ref_image_ids||[]).map(id=>({id, src:`/images/${id}.png`})), ...(prefill.ref_image_data||[]).map(src=>({src}))];
+  const refs = (prefill.ref_images||[]).map(src=>({src}));
   const m=openModal(editing ? L('Edit template','Edit template') : L('Buat template baru','Create a new template'), `
     <p class="hint" style="margin-bottom:6px">${L('Template adalah titik awal desain: deskripsi gaya + gambar acuan. Desain baru dibuat “dalam gaya” template ini.','A template is a starting point: a style description + reference images. New designs are generated “in the style” of this template.')}</p>
     <label class="lbl">${L('Nama template','Template name')}</label><input type="text" id="t-name" maxlength="80" value="${esc(prefill.name||'')}" placeholder="${L('Contoh: Batik Ngentrong Daun Cengkeh','e.g. Ngentrong Clove Leaf Batik')}">
@@ -502,13 +548,14 @@ function templateModal(prefill={}, {onSaved}={}){
   $('[data-cancel]',r).addEventListener('click',m.close);
   $('#t-del',r)?.addEventListener('click',async()=>{ if(await deleteTemplate(prefill.id)){ m.close(); onSaved && onSaved(null); } });
   $('#t-save',r).addEventListener('click',async()=>{
-    const body={name:$('#t-name',r).value.trim(), description:$('#t-desc',r).value.trim(), palette:$('#t-pal',r).value||null,
-      origin:$('#t-origin',r).value.trim()||null, meaning:$('#t-mean',r).value.trim()||null,
-      ref_image_ids:refs.filter(x=>x.id).map(x=>x.id), ref_image_data:refs.filter(x=>!x.id).map(x=>x.src)};
-    if(!body.name || !body.description){ toast(L('Nama dan deskripsi wajib diisi.','Name and description are required.'),true); return; }
+    const origin=$('#t-origin',r).value.trim(), meaning=$('#t-mean',r).value.trim();
+    const t={id: prefill.id || newId('tpl'), name:$('#t-name',r).value.trim(), description:$('#t-desc',r).value.trim(), palette:$('#t-pal',r).value||null,
+      origin: origin ? {id:origin, en:origin} : null, meaning: meaning ? {id:meaning, en:meaning} : null,
+      builtin:false, ref_images: refs.map(x=>x.src), created: (tplById(prefill.id)||{}).created || Date.now()};
+    if(!t.name || !t.description){ toast(L('Nama dan deskripsi wajib diisi.','Name and description are required.'),true); return; }
     const btn=$('#t-save',r); btn.disabled=true;
     try{
-      const t = editing ? await api('/api/templates/'+prefill.id, body, 'PUT') : await api('/api/templates', body);
+      await idbPut('templates', t);
       const i=state.templates.findIndex(x=>x.id===t.id); if(i>=0) state.templates[i]=t; else state.templates.push(t);
       m.close(); toast(L('Template tersimpan: ','Template saved: ')+t.name); onSaved && onSaved(t);
     }catch(e){ toast(e.message,true); btn.disabled=false; }
@@ -519,7 +566,7 @@ async function deleteTemplate(id){
   const t=tplById(id); if(!t || t.builtin) return false;
   if(!await confirmModal(L(`Hapus template “${t.name}”? Desain yang sudah dibuat dari template ini tetap ada.`,`Delete the template “${t.name}”? Designs already made from it are kept.`), L('Hapus template','Delete template'))) return false;
   try{
-    await api('/api/templates/'+id,undefined,'DELETE');
+    await idbDel('templates', id);
     state.templates=state.templates.filter(x=>x.id!==id);
     if(state.studio.template_id===id) state.studio.template_id='kawung';
     toast(L('Template dihapus','Template deleted')); return true;
@@ -527,13 +574,45 @@ async function deleteTemplate(id){
 }
 /* "Save as template" from any design: rasterise if needed, then prefill the modal. */
 async function saveAsTemplate(d){
-  let ids=[];
-  if(d.image_id) ids=[d.image_id];
-  else{ try{ const cv=await svgToCanvas(rawSVG(d,768),768,Math.round(768/arOf(d))); const up=await api('/api/images',{data:cv.toDataURL('image/png')}); ids=[up.image_id]; }catch(e){ toast(e.message,true); return; } }
+  let ref;
+  try{ ref = d.image ? await shrinkDataURL(d.image, 1024) : (await svgToCanvas(rawSVG(d,768),768,Math.round(768/arOf(d)))).toDataURL('image/jpeg',.9); }
+  catch(e){ toast(e.message,true); return; }
   const base = tplById(d.template_id);
   templateModal({name:dn(d), palette:d.pal&&d.pal!=='auto'?d.pal:(base&&base.palette)||'',
     description: [base ? `${L('Berdasarkan','Based on')} ${base.name}: ${base.description}` : '', d.prompt ? `${L('Arahan','Direction')}: ${d.prompt}` : ''].filter(Boolean).join('\n') || L('Gaya seperti gambar acuan.','Style like the reference image.'),
-    origin: base && base.origin ? tr(base.origin) : '', ref_image_ids:ids});
+    origin: base && base.origin ? tr(base.origin) : '', ref_images:[ref]});
+}
+
+/* ---------- API key modal: visitors use their own Gemini key ---------- */
+function keyModal({onSaved}={}){
+  const cur=getKey();
+  const m=openModal(L('API key Gemini','Gemini API key'), `
+    <p style="margin-bottom:10px">${L('Prototipe ini memakai kunci Gemini milikmu sendiri. Tanpa kunci, aplikasi tetap bisa dicoba dalam <b>mode mock</b> dengan gambar contoh.','This prototype uses your own Gemini key. Without one you can still try everything in <b>mock mode</b> with sample images.')}</p>
+    <label class="lbl">API key</label>
+    <div class="row"><input type="password" id="k-in" autocomplete="off" spellcheck="false" placeholder="AIza… / AQ.…" value="${esc(cur)}"><button class="btn ghost sm" id="k-show" type="button">${ico('eye',15)}</button></div>
+    <p class="hint" style="margin-top:8px">${L('Buat kunci gratis di','Get a key at')} <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--soga);font-weight:600">aistudio.google.com/apikey</a>.</p>
+    <ul class="kawung hint" style="margin-top:12px">
+      <li>${L('Kunci disimpan hanya di browser ini (localStorage), bukan di server.','The key is stored only in this browser (localStorage), not on the server.')}</li>
+      <li>${L('Kunci dikirim bersama setiap permintaan hanya untuk memanggil Gemini, lalu tidak disimpan atau dicatat.','It is sent with each request only to call Gemini, and is never saved or logged.')}</li>
+      <li>${L('Biaya pemakaian Gemini masuk ke akun pemilik kunci.','Gemini usage is billed to the key owner.')}</li>
+    </ul>
+    <div class="row" style="margin-top:18px">${cur?`<button class="btn danger" id="k-del">${ico('trash')} ${L('Hapus kunci','Remove key')}</button>`:''}<div class="sp"></div>
+      <button class="btn ghost" data-cancel>${cur?L('Batal','Cancel'):L('Pakai mode mock','Use mock mode')}</button>
+      <button class="btn primary" id="k-save">${ico('check')} ${L('Cek & simpan','Check & save')}</button></div>`);
+  const r=m.root, inp=$('#k-in',r);
+  try{ localStorage.setItem('canting-key-asked','1'); }catch(e){}
+  $('#k-show',r).addEventListener('click',()=>{ inp.type = inp.type==='password' ? 'text' : 'password'; });
+  $('[data-cancel]',r).addEventListener('click',m.close);
+  $('#k-del',r)?.addEventListener('click',()=>{ setKey(''); m.close(); toast(L('Kunci dihapus, kembali ke mode mock','Key removed, back to mock mode')); onSaved && onSaved(); });
+  const save=async()=>{
+    const k=inp.value.trim(); if(!k){ toast(L('Masukkan API key dulu.','Enter an API key first.'),true); return; }
+    const b=$('#k-save',r); b.disabled=true; b.innerHTML=ico('clock')+' '+L('Mengecek…','Checking…');
+    try{ await api('/api/check-key', {}, 'POST', k); setKey(k); m.close(); toast(L('Kunci valid, Gemini aktif','Key works, Gemini is on')); onSaved && onSaved(); }
+    catch(e){ toast(e.message,true); b.disabled=false; b.innerHTML=ico('check')+' '+L('Cek & simpan','Check & save'); }
+  };
+  $('#k-save',r).addEventListener('click',save);
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter') save(); });
+  setTimeout(()=>inp.focus(),50);
 }
 
 /* ---------- shared UI bits ---------- */
@@ -563,14 +642,15 @@ function shell(route, inner){
   <aside class="side">${logo()}
     ${NAV().map(([r,l,i])=>`<a class="nv ${r===route?'on':''}" href="#/${r}">${ico(i,20)}<span>${l}</span></a>`).join('')}
     <div class="sp"></div>
-    <div class="credit"><b><i class="dot ${st.mock?'mock':''}"></i>${st.mock ? L('Mode mock (tanpa AI)','Mock mode (no AI)') : 'Gemini API'}</b>
-      <span>${st.mock ? L('Isi GEMINI_API_KEY di backend/.env untuk memakai Gemini.','Set GEMINI_API_KEY in backend/.env to use Gemini.') : `<b id="side-model" style="display:inline;color:#fff">${esc(modelLabel(state.aiModel)||st.image_model)}</b>`}</span>
+    <div class="credit"><b><i class="dot ${aiMode()==='mock'?'mock':''}"></i>${aiMode()==='mock' ? L('Mode mock (tanpa AI)','Mock mode (no AI)') : aiMode()==='own' ? L('Gemini · kunci sendiri','Gemini · your key') : 'Gemini API'}</b>
+      <span>${aiMode()==='mock' ? L('Masukkan API key Gemini untuk hasil AI asli.','Add a Gemini API key for real AI results.') : `<b id="side-model" style="display:inline;color:#fff">${esc(modelLabel(state.aiModel)||st.image_model)}</b>`}</span>
+      <button class="btn gold xs" data-keybtn style="margin-top:8px">${ico('lock',13)} ${getKey()?L('Ganti API key','Change API key'):L('Masukkan API key','Add API key')}</button>
       <span>${st.images} ${L('gambar AI dibuat','AI images made')}${st.avg_ms?` · ${L('rata-rata','avg')} ${(st.avg_ms/1000).toFixed(1)} ${L('dtk','s')}`:''}</span></div>
     <div class="me"><div class="av">LA</div><div>${UMKM}<small>${L('UMKM batik · prototipe','Batik UMKM · prototype')}</small></div></div>
     <div class="tumpal"></div>
   </aside>
   <main class="main">
-    <div class="top"><span class="crumbs">Canting AI &nbsp;/&nbsp; <b style="color:var(--ink)">${title}</b></span><div class="sp"></div>${langSwitch()}${st.mock?`<span class="tag mock">${L('Mode mock','Mock mode')}</span>`:`<span class="tag ok">${ico('check',12)} Gemini</span>`}</div>
+    <div class="top"><span class="crumbs">Canting AI &nbsp;/&nbsp; <b style="color:var(--ink)">${title}</b></span><div class="sp"></div>${langSwitch()}<button class="tag ${aiMode()==='mock'?'mock':'ok'}" data-keybtn style="border:0;cursor:pointer">${aiMode()==='mock'?L('Mode mock · masukkan API key','Mock mode · add API key'):ico('check',12)+' '+(aiMode()==='own'?L('Gemini · kunci sendiri','Gemini · your key'):'Gemini')}</button></div>
     <div class="content">${inner}</div>
   </main></div>`;
 }

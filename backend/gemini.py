@@ -39,23 +39,47 @@ class AIError(Exception):
 
 
 class GeminiAI:
+    """Each request may bring its own key (the visitor's, from the X-Gemini-Key header).
+    Without one it falls back to GEMINI_API_KEY from the environment, and without that to the free mock."""
+
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        self.image_model = os.getenv("IMAGE_MODEL", "gemini-2.5-flash-image")
+        self.image_model = os.getenv("IMAGE_MODEL", "gemini-nano-banana-2.1")
         self.text_model = os.getenv("TEXT_MODEL", "gemini-2.5-flash")
-        self.mock = os.getenv("MOCK_AI", "0") == "1" or not self.api_key
-        self.client = None
-        if not self.mock:
-            from google import genai
-            self.client = genai.Client(api_key=self.api_key)
+        self.force_mock = os.getenv("MOCK_AI", "0") == "1"
+        self.mock = self.force_mock or not self.api_key  # mode for requests that bring no key
+        self._server_client = None
+
+    def is_mock(self, api_key: str | None) -> bool:
+        return self.force_mock or not ((api_key or "").strip() or self.api_key)
+
+    def _client(self, api_key: str | None):
+        from google import genai
+        key = (api_key or "").strip()
+        if key:  # a visitor's key: a fresh client per request, never stored
+            return genai.Client(api_key=key)
+        if self._server_client is None:
+            self._server_client = genai.Client(api_key=self.api_key)
+        return self._server_client
+
+    async def check_key(self, api_key: str) -> None:
+        """Cheap validity check (lists models, no generation cost). Raises AIError on a bad key."""
+        try:
+            client = self._client(api_key)  # keep a reference: a garbage-collected client cancels its own request
+            pager = await client.aio.models.list(config={"page_size": 1})
+            async for _ in pager:
+                break
+        except Exception as e:
+            raise AIError(_friendly(e)) from e
 
     # ---------- images ----------
     async def image(self, prompt: str, labelled_images: list[tuple[str, bytes]], palette: str | None = None,
-                    aspect: str = "1:1", model: str | None = None, size: str | None = None) -> bytes:
+                    aspect: str = "1:1", model: str | None = None, size: str | None = None,
+                    api_key: str | None = None) -> bytes:
         """labelled_images: [(label, png_or_jpeg_bytes), ...] sent before the prompt."""
         model = model if model in IMAGE_MODELS else self.image_model
         size = size_for(model, size)
-        if self.mock:
+        if self.is_mock(api_key):
             return await asyncio.to_thread(_mock_image, prompt, labelled_images, palette, aspect, size)
 
         from google.genai import types
@@ -72,8 +96,9 @@ class GeminiAI:
         except Exception:  # older SDKs / models without image_config
             pass
 
+        client = self._client(api_key)  # keep a reference for the whole call (see check_key)
         try:
-            resp = await self.client.aio.models.generate_content(model=model, contents=contents, config=config)
+            resp = await client.aio.models.generate_content(model=model, contents=contents, config=config)
         except Exception as e:  # network, quota, invalid key, bad model id …
             raise AIError(_friendly(e)) from e
 
@@ -87,13 +112,14 @@ class GeminiAI:
         raise AIError("Model tidak mengembalikan gambar. Coba ulangi atau ubah deskripsinya.")
 
     # ---------- text ----------
-    async def text(self, prompt: str) -> str:
-        if self.mock:
+    async def text(self, prompt: str, api_key: str | None = None) -> str:
+        if self.is_mock(api_key):
             await asyncio.sleep(0.6)
             return ("✨ [MOCK] Caption contoh ✨\n\nIni teks contoh karena mode mock aktif. "
-                    "Isi GEMINI_API_KEY di backend/.env untuk caption asli dari Gemini.\n\n#batik #umkm #mock")
+                    "Masukkan API key Gemini (tombol API key) untuk caption asli dari Gemini.\n\n#batik #umkm #mock")
+        client = self._client(api_key)
         try:
-            resp = await self.client.aio.models.generate_content(model=self.text_model, contents=prompt)
+            resp = await client.aio.models.generate_content(model=self.text_model, contents=prompt)
         except Exception as e:
             raise AIError(_friendly(e)) from e
         return (resp.text or "").strip()
@@ -130,7 +156,7 @@ def _to_png(data: bytes) -> bytes:
 def _friendly(e: Exception) -> str:
     msg = str(e)
     if "API_KEY_INVALID" in msg or "API key not valid" in msg:
-        return "API key Gemini tidak valid. Periksa GEMINI_API_KEY di backend/.env."
+        return "API key Gemini tidak valid. Periksa kembali kunci yang dimasukkan."
     if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
         return "Kuota / batas permintaan Gemini habis. Tunggu sebentar lalu coba lagi."
     if "NOT_FOUND" in msg or "404" in msg:

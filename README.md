@@ -1,34 +1,39 @@
 # Canting AI: functional prototype
 
 Batik motif design platform for UMKM, built with a FastAPI backend and the Gemini API.
-It grew out of `../canting-ai-mockup.html` (the old all-simulated mockup); see `../PLAN.md` for the plan.
 
-## Run it
+**Bring your own key:** the app has no API key of its own. Each visitor enters their own Gemini key in the
+"API key" dialog; it is kept only in their browser (localStorage) and sent with each request to call Gemini,
+never stored or logged on the server. Without a key everything runs in **mock mode** (free sample images).
+Designs and custom templates are saved in the visitor's browser (IndexedDB), so the server is stateless.
+
+## Run locally
 
 Requires Python 3.10+.
 
 ```bash
-cd canting-ai/backend
-pip install -r requirements.txt
-copy .env.example .env      # macOS/Linux: cp .env.example .env
+cd canting-ai
+pip install -r backend/requirements.txt
+python -m uvicorn app:app --reload --port 8000
 ```
 
-Open `backend/.env` and set your key (from https://aistudio.google.com/apikey):
+Open http://localhost:8000 and click **Masukkan API key** to add your key (from https://aistudio.google.com/apikey).
 
-```
-GEMINI_API_KEY=your-key-here
-MOCK_AI=0
-```
+Optional for local development: put `GEMINI_API_KEY=...` in `backend/.env` (copy `backend/.env.example`) so the
+server uses it when a visitor has not entered one. `MOCK_AI=1` forces mock mode. Never commit `.env`; it is gitignored.
 
-Then start the server (still inside `backend/`):
+## Deploy to Vercel
 
-```bash
-python -m uvicorn main:app --reload --port 8000
-```
+The repo is ready for Vercel's FastAPI support: `app.py` is the entry point, `public/` is served by the CDN,
+`requirements.txt` lists the dependencies, and `vercel.json` raises the function time limit to 120 s (a 4K image
+takes about 40 s).
 
-Open http://localhost:8000.
+1. Import the GitHub repo in Vercel (New Project), framework preset FastAPI, root directory = this folder.
+2. Do **not** add `GEMINI_API_KEY`: visitors bring their own key. (`IMAGE_MODEL` / `TEXT_MODEL` are optional.)
+3. Deploy.
 
-**Mock mode:** with `MOCK_AI=1`, or with no key, the app never calls Gemini. It draws simple fake patterns locally instead, which is useful for testing the UI for free. The sidebar shows which mode is active.
+Limits: a Vercel function response is at most 4.5 MB, so images are returned as WebP (quality drops automatically
+for very large 4K results), and inputs are shrunk in the browser before sending.
 
 ## What works
 
@@ -36,46 +41,35 @@ Open http://localhost:8000.
 |---|---|
 | Generate from a **template** (Kawung, Parang, Mega Mendung, Truntum, Sekar Jagad, Ceplok, or your own) | Gemini image model, 1–4 variations in parallel, each with a different composition hint |
 | Generate from **text**, a **reference photo**, and/or a **marker sketch** | All sent to Gemini as labelled images + a structured prompt (`backend/prompts.py`) |
-| **Formats** | Ubin / tile (1:1 seamless repeat), Kain panjang (16:9 full cloth with tumpal end panel), Selendang (9:16 shawl with a central motif), Pinggiran (21:9 border strip that repeats sideways). Sent to Gemini as the aspect ratio + a layout rule. Edits keep the original shape; the editor, marker canvas, watermark, export and mockups all follow the image's shape. |
-| **Templates** | Create (name, description, palette, origin, meaning, up to 3 reference images or sketches), edit, delete, "New style" from a built-in, "Make template" from any design |
-| **Edit with AI** | Gemini image editing; full version history |
-| **Mark what to change** | Draw on the design with a marker. The marked copy + the clean original are sent so only that area changes. |
-| Colour / scale / rotation / mirror | In the browser (SVG filters + pattern tiling) |
-| Watermark + PNG export | In the browser (canvas). The certificate shows a real SHA-256 fingerprint of the image file. |
-| Product mockups | The generated tile on a shirt, dress, tote and cloth |
-| Captions | Gemini text model ("Write with AI"), with a local template as fallback |
-| Collection | SQLite (`data/canting.db`) + PNG files (`data/images/`) |
-| Metrics | Each generation/edit is timed and logged; the dashboard shows the count and average time (for the "waktu penyelesaian tugas" evaluation) |
+| **Formats** | Ubin / tile (1:1 seamless repeat), Kain panjang (16:9 full cloth with tumpal end panel), Selendang (9:16 shawl with a central motif), Pinggiran (21:9 border strip that repeats sideways). Sent to Gemini as the aspect ratio + a layout rule. Edits keep the original shape. |
+| **Model and resolution** | Nano Banana 2.1 / 2 / 2 Lite, 1K / 2K / 4K; sizes a model can't do are greyed out |
+| **Templates** | Create, edit, delete, "New style" from a built-in, "Make template" from any design; saved in the browser |
+| **Edit with AI** + **mark what to change** | Gemini image editing; marker strokes limit the change to the marked area; version history |
+| Colour / scale / rotation / mirror, watermark, PNG export, product mockups | In the browser (SVG + canvas); SHA-256 fingerprint of the image |
+| Captions | Gemini text model, with a local template as fallback |
+| Dashboard metrics | Generation count and average time, kept per browser |
 
-**Still simulated:** the invisible watermark and copy detection (marked "planned" / "simulation" in the UI).
+**Still simulated:** the invisible watermark and copy detection.
 
 ## Layout
 
 ```
+app.py          entry point (Vercel and local); loads backend/main.py
 backend/
-  main.py       FastAPI routes + serves the frontend
-  gemini.py     every Gemini call (+ the mock)
+  main.py       FastAPI routes (stateless)
+  gemini.py     every Gemini call, per-request keys, the mock, model list
   prompts.py    motif descriptions + prompt templates (tune quality here)
-  db.py         SQLite: templates, designs, generation log
-frontend/
-  index.html  styles.css  core.js (rendering, API, drawing pad, modals)  pages.js (pages + router)
-data/           created on first run, gitignored
+public/         index.html, styles.css, core.js (rendering, API, storage, modals), pages.js
+vercel.json     function time limit, "/" -> index.html
+docs/screenshots/
 ```
 
-## Changing models
-
-The Studio and Editor have a **Model AI** picker with the image models listed in `IMAGE_MODELS` in `backend/gemini.py`:
+## Models
 
 | Model | ID | Resolutions | Measured (1 tile) |
 |---|---|---|---|
 | Nano Banana 2.1 | `gemini-nano-banana-2.1` | 1K, 2K, 4K | 1K ~17 s, 2K ~20 s, 4K ~40 s; best batik detail |
 | Nano Banana 2 | `gemini-3.1-flash-image` | 1K, 2K, 4K | 1K ~12 s, 2K ~21 s, 4K ~31 s; clearly batik |
-| Nano Banana 2 Lite | `gemini-3.1-flash-lite-image` | 1K only | ~4 s; looks more like a generic tile |
+| Nano Banana 2 Lite | `gemini-3.1-flash-lite-image` | 1K only | ~4–7 s; looks more like a generic tile |
 
-The Studio's **Resolution** picker (1K / 2K / 4K) greys out sizes the chosen model can't do. AI edits keep the resolution of the image being edited. Input images bigger than 1536 px are shrunk before they are sent to Gemini.
-
-`IMAGE_MODEL` in `backend/.env` sets the default; `TEXT_MODEL` sets the caption model. To offer another model, add it to `IMAGE_MODELS`.
-
-## Cost note
-
-Every variation is one paid image call, so "Generate 4 variations" = 4 calls. Use the 1/2/4 selector in the Studio, and mock mode while working on the UI.
+To offer another model, add it to `IMAGE_MODELS` in `backend/gemini.py`.
