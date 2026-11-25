@@ -2,6 +2,8 @@
 
 Batik motif design platform for UMKM, built with a FastAPI backend and the Gemini API.
 
+**Live demo:** https://canting-ai.vercel.app (works without a key in mock mode; add your own Gemini key for real images)
+
 **Bring your own key:** the app has no API key of its own. Each visitor enters their own Gemini key in the
 "API key" dialog; it is kept only in their browser (localStorage) and sent with each request to call Gemini,
 never stored or logged on the server. Without a key everything runs in **mock mode** (free sample images).
