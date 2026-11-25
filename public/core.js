@@ -51,19 +51,29 @@ const IC = {
   scan:'<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M7 12h10"/>',
   refresh:'<path d="M20 11a8 8 0 0 0-14-4L4 9M4 4v5h5M4 13a8 8 0 0 0 14 4l2-2M20 20v-5h-5"/>',
   cpu:'<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
-  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  chat:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
+  send:'<path d="M4 12l16-8-6 16-3-7z"/><path d="M11 13l9-9"/>',
+  ruler:'<path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
+  printer:'<path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>'
 };
 const ico = (n, s=18) => `<svg class="ico" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]||''}</svg>`;
 
 /* ---------- palettes & built-in motif metadata (procedural SVG fallback) ---------- */
 const PALETTES = {
-  soga:   {label:{id:'Soga Klasik',en:'Classic Soga'},     c:{bg:'#EBD9B4', dark:'#3A2216', primary:'#7A4426', secondary:'#C08A4F', accent:'#F6EBD0'}},
-  indigo: {label:{id:'Indigo Wastra',en:'Indigo Cloth'},   c:{bg:'#16294A', dark:'#08122B', primary:'#3C6BB0', secondary:'#9BBDE6', accent:'#F4EEDC'}},
-  pesisir:{label:{id:'Pesisir Lasem',en:'Lasem Coast'},    c:{bg:'#F3E6CF', dark:'#4A0F14', primary:'#B3262B', secondary:'#1F7A7A', accent:'#E0A63A'}},
-  hijau:  {label:{id:'Hijau Rimba',en:'Forest Green'},     c:{bg:'#EFE8CF', dark:'#16301F', primary:'#3E7A52', secondary:'#B89A3E', accent:'#8A4B2A'}},
-  modern: {label:{id:'Pastel Modern',en:'Modern Pastel'},  c:{bg:'#FBEFEA', dark:'#4F3F5F', primary:'#E39AA3', secondary:'#9FB8D9', accent:'#F4D58D'}},
-  mono:   {label:{id:'Monokrom',en:'Monochrome'},          c:{bg:'#F4F1EA', dark:'#111111', primary:'#2B2B2B', secondary:'#8D8D8D', accent:'#D6D1C6'}}
+  soga:   {dye:'alam', label:{id:'Soga Klasik',en:'Classic Soga'},     c:{bg:'#EBD9B4', dark:'#3A2216', primary:'#7A4426', secondary:'#C08A4F', accent:'#F6EBD0'}},
+  indigo: {dye:'alam', label:{id:'Indigo Wastra',en:'Indigo Cloth'},   c:{bg:'#16294A', dark:'#08122B', primary:'#3C6BB0', secondary:'#9BBDE6', accent:'#F4EEDC'}},
+  pesisir:{dye:'sintetis', label:{id:'Pesisir Lasem',en:'Lasem Coast'},    c:{bg:'#F3E6CF', dark:'#4A0F14', primary:'#B3262B', secondary:'#1F7A7A', accent:'#E0A63A'}},
+  hijau:  {dye:'sintetis', label:{id:'Hijau Rimba',en:'Forest Green'},     c:{bg:'#EFE8CF', dark:'#16301F', primary:'#3E7A52', secondary:'#B89A3E', accent:'#8A4B2A'}},
+  modern: {dye:'sintetis', label:{id:'Pastel Modern',en:'Modern Pastel'},  c:{bg:'#FBEFEA', dark:'#4F3F5F', primary:'#E39AA3', secondary:'#9FB8D9', accent:'#F4D58D'}},
+  mono:   {dye:'sintetis', label:{id:'Monokrom',en:'Monochrome'},          c:{bg:'#F4F1EA', dark:'#111111', primary:'#2B2B2B', secondary:'#8D8D8D', accent:'#D6D1C6'}},
+  mahoni: {dye:'alam', label:{id:'Mahoni Alam',en:'Natural Mahogany'}, c:{bg:'#E8D6BC', dark:'#3B1F17', primary:'#8C3F2B', secondary:'#B97A62', accent:'#F1E4CE'}},
+  tegeran:{dye:'alam', label:{id:'Tegeran Kuning',en:'Tegeran Yellow'}, c:{bg:'#EFE2BF', dark:'#3A2C14', primary:'#B8902C', secondary:'#7D6A32', accent:'#F7EED6'}},
+  tingi:  {dye:'alam', label:{id:'Tingi & Nila',en:'Tingi & Indigo'},  c:{bg:'#ECE1CB', dark:'#1E1612', primary:'#7E3A22', secondary:'#4F6688', accent:'#F5EDDC'}},
+  cerah:  {dye:'sintetis', label:{id:'Remazol Cerah',en:'Bright Remazol'}, c:{bg:'#FFF8F2', dark:'#3E1A4F', primary:'#D6267A', secondary:'#16A6A0', accent:'#F28C28'}}
 };
+/* natural (pewarna alam) vs synthetic (naptol / remazol) dyes: the one colour question customers actually ask */
+const DYES = {bebas:{id:'Bebas',en:'Any'}, alam:{id:'Pewarna alam',en:'Natural dye'}, sintetis:{id:'Sintetis',en:'Synthetic'}};
 const STYLES = {
   kawung:{label:'Kawung', rot:0, tag:'batikkawung'},
   parang:{label:'Parang', rot:-35, tag:'batikparang'},
@@ -232,8 +242,8 @@ async function api(path, body, method, key=getKey()){
 let _idb;
 function idb(){
   return _idb ||= new Promise((res, rej)=>{
-    const r = indexedDB.open('canting-ai', 1);
-    r.onupgradeneeded = () => { r.result.createObjectStore('designs', {keyPath:'id'}); r.result.createObjectStore('templates', {keyPath:'id'}); };
+    const r = indexedDB.open('canting-ai', 2);
+    r.onupgradeneeded = () => { for(const st of ['designs','templates','orders']) if(!r.result.objectStoreNames.contains(st)) r.result.createObjectStore(st, {keyPath:'id'}); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
@@ -260,9 +270,9 @@ const aiMode = () => getKey() ? 'own' : (state.status.server_key ? 'server' : 'm
 /* ---------- state ---------- */
 const UMKM = 'Batik Laras Ayu';
 const state = {
-  designs: [], templates: [], status: {mock:true, images:0, avg_ms:0},
+  designs: [], templates: [], orders: [], status: {mock:true, images:0, avg_ms:0},
   current: null,
-  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', density:'medium', count:4, refs:[], sketch:null, sketchStrokes:null, status:'idle', results:[], used:''},
+  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, refs:[], sketch:null, sketchStrokes:null, status:'idle', results:[], used:''},
   wm: {text:UMKM, pos:'br', opacity:.6, size:1, color:'#ffffff', invisible:true, owner:UMKM},
   mock: {bg:'#F3E9D2', scale:1}
 };
@@ -304,12 +314,13 @@ function bindModelSelect(root=document){
   }));
 }
 async function loadAll(){
-  const [st, tp, mine, ds] = await Promise.allSettled([api('/api/status'), api('/api/templates'), idbAll('templates'), idbAll('designs')]);
+  const [st, tp, mine, ds, od] = await Promise.allSettled([api('/api/status'), api('/api/templates'), idbAll('templates'), idbAll('designs'), idbAll('orders')]);
   if(st.status==='fulfilled') state.status={...st.value, ...localStats()};
   const builtin = tp.status==='fulfilled' ? tp.value : [];
   const own = mine.status==='fulfilled' ? mine.value.sort((a,b)=>(a.created||0)-(b.created||0)) : [];
   state.templates = [...builtin, ...own];
   if(ds.status==='fulfilled') state.designs = ds.value.sort((a,b)=>(b.updated||0)-(a.updated||0));
+  if(od.status==='fulfilled') state.orders = od.value.sort((a,b)=>(b.updated||0)-(a.updated||0));
   if(st.status==='rejected') toast(st.reason.message, true);
   initModel();
   state.current = state.designs[0] ? structuredClone(state.designs[0]) : sampleDesign();
@@ -628,6 +639,7 @@ function bandSVG(){
 const NAV = () => [
   ['dashboard','Dashboard','layout'],
   ['studio',L('Studio AI','AI Studio'),'sparkle'],
+  ['orders',L('Pesanan','Orders'),'chat'],
   ['templates','Template','layers'],
   ['editor','Editor','edit'],
   ['watermark','Watermark','shield'],
@@ -660,6 +672,7 @@ function lnav(active){
     <nav>${home
       ? `<a href="#masalah">${L('Masalah','Problem')}</a><a href="#fitur">${L('Fitur','Features')}</a><a href="#cara">${L('Cara kerja','How it works')}</a><a href="#budaya">${L('Etika & budaya','Ethics & culture')}</a>`
       : `<a href="#/">${L('Beranda','Home')}</a>`}
+      <a href="#/pesan">${L('Pesan batik','Order batik')}</a>
       <a href="#/architecture" class="${active==='arch'?'on':''}">${L('Arsitektur','Architecture')}</a></nav>
     <div class="sp"></div>${langSwitch()}
     <a class="btn ghost sm" href="#/dashboard">${L('Masuk','Sign in')}</a><a class="btn primary sm" href="#/studio">${L('Coba sekarang','Try it now')}</a></div></header>`;

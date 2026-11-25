@@ -48,6 +48,11 @@ for very large 4K results), and inputs are shrunk in the browser before sending.
 | **Templates** | Create, edit, delete, "New style" from a built-in, "Make template" from any design; saved in the browser |
 | **Edit with AI** + **mark what to change** | Gemini image editing; marker strokes limit the change to the marked area; version history |
 | Colour / scale / rotation / mirror, watermark, PNG export, product mockups | In the browser (SVG + canvas); SHA-256 fingerprint of the image |
+| **Order assistant (chatbot)** | Customer chats in plain Bahasa/English; Gemini (JSON schema) asks purpose, product, motif, colours, natural vs synthetic dye, size, deadline and fills an **order brief**; 2 AI previews from the brief |
+| **Approval + revisions** | Watermarked approval sheet (preview, mockup, brief) to send on WhatsApp; change requests are logged and become the AI edit instruction in the Editor; the edited version goes back into the order |
+| **Customer link** | `#/pesan?toko=…&wa=…`: phone-first page where a customer makes their own brief and sends it to the shop's WhatsApp |
+| **Tracing pattern (pola nyorek)** | Gemini turns a design into black line art (mock: edge detection); printed at real cloth size over A4/A3 sheets with labels, overlap lines and a 5 cm scale check, or just one repeat |
+| **Natural vs synthetic dye** | Dye toggle in the Studio; natural palettes (soga, nila, mahoni, tegeran, tingi) and a dye rule in the prompt |
 | Captions | Gemini text model, with a local template as fallback |
 | Dashboard metrics | Generation count and average time, kept per browser |
 

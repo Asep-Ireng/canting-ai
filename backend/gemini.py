@@ -124,6 +124,32 @@ class GeminiAI:
             raise AIError(_friendly(e)) from e
         return (resp.text or "").strip()
 
+    async def chat(self, system: str, messages: list[tuple[str, str, bytes | None]], schema, api_key: str | None = None):
+        """Multi-turn chat that answers with JSON matching `schema` (a pydantic model).
+        messages: [(role 'user'|'model', text, optional image bytes), ...]. Returns the parsed model."""
+        from google.genai import types
+        contents = []
+        for role, text, img in messages:
+            parts = []
+            if img:
+                img = _shrink(img)
+                parts.append(types.Part.from_bytes(data=img, mime_type=_mime(img)))
+            parts.append(types.Part.from_text(text=text or "(gambar)"))
+            contents.append(types.Content(role="model" if role == "model" else "user", parts=parts))
+        config = types.GenerateContentConfig(system_instruction=system, response_mime_type="application/json",
+                                             response_schema=schema, temperature=0.6)
+        client = self._client(api_key)
+        try:
+            resp = await client.aio.models.generate_content(model=self.text_model, contents=contents, config=config)
+        except Exception as e:
+            raise AIError(_friendly(e)) from e
+        if getattr(resp, "parsed", None) is not None:
+            return resp.parsed
+        try:
+            return schema.model_validate_json(resp.text or "")
+        except Exception as e:
+            raise AIError("Jawaban asisten tidak terbaca. Coba kirim ulang pesannya.") from e
+
 
 def _shrink(data: bytes) -> bytes:
     """Downscale big inputs (e.g. a 4K design being edited) so the request stays small; small ones pass untouched."""
@@ -162,6 +188,16 @@ def _friendly(e: Exception) -> str:
     if "NOT_FOUND" in msg or "404" in msg:
         return "Model Gemini tidak ditemukan. Periksa IMAGE_MODEL / TEXT_MODEL di backend/.env."
     return f"Gagal menghubungi Gemini: {msg[:200]}"
+
+
+def mock_lineart(data: bytes) -> bytes:
+    """Free local tracing pattern for mock mode: edge detection -> black lines on white."""
+    img = Image.open(io.BytesIO(data)).convert("L")
+    img = img.filter(ImageFilter.GaussianBlur(1.1)).filter(ImageFilter.FIND_EDGES)
+    img = img.point(lambda v: 0 if v > 28 else 255).filter(ImageFilter.MinFilter(3))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
 
 
 # ---------- mock image: a simple procedural batik-ish tile ----------

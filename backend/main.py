@@ -6,6 +6,7 @@ and templates are saved in the visitor's own browser. A visitor can bring their 
 
 Run locally (from the project root):  python -m uvicorn app:app --reload --port 8000
 """
+import asyncio
 import base64
 import io
 import os
@@ -16,7 +17,8 @@ ROOT = Path(__file__).resolve().parent
 
 
 def _load_env():
-    """Minimal .env loader for local development. Values in backend/.env win over system env vars."""
+    """Minimal .env loader for local development. Values in backend/.env win over system env vars,
+    except MOCK_AI when it is set on the command line (so a mock test server can run next to a real one)."""
     f = ROOT / ".env"
     if not f.exists():
         return
@@ -24,6 +26,8 @@ def _load_env():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
+            if k.strip() == "MOCK_AI" and "MOCK_AI" in os.environ:
+                continue
             os.environ[k.strip()] = v.strip().strip('"').strip("'")
 
 
@@ -36,7 +40,7 @@ from PIL import Image  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 import prompts  # noqa: E402
-from gemini import IMAGE_MODELS, SIZE_PX, AIError, GeminiAI  # noqa: E402
+from gemini import IMAGE_MODELS, SIZE_PX, AIError, GeminiAI, mock_lineart  # noqa: E402
 
 app = FastAPI(title="Canting AI")
 ai = GeminiAI()
@@ -154,6 +158,7 @@ class GenerateIn(BaseModel):
     size: str = "1K"                    # 1K | 2K | 4K, clamped to what the model accepts
     references: list[str] = Field(default_factory=list, max_length=3)  # data URLs
     sketch: str | None = None           # data URL
+    dye: str | None = None              # "alam" (natural) | "sintetis" (synthetic) | None = from the palette
 
 
 @app.post("/api/generate")
@@ -170,7 +175,7 @@ async def generate(body: GenerateIn, x_gemini_key: str | None = Header(default=N
     text = prompts.generate_prompt(
         user_prompt=body.prompt, template=tpl, palette=body.palette, density=body.density,
         variation=body.variation, n_template_refs=len(tpl_refs), n_user_refs=len(body.references),
-        has_sketch=bool(body.sketch), format=body.format)
+        has_sketch=bool(body.sketch), format=body.format, dye=body.dye)
 
     t0 = time.perf_counter()
     try:
@@ -234,6 +239,140 @@ async def caption(body: CaptionIn, x_gemini_key: str | None = Header(default=Non
         return {"text": await ai.text(text, api_key=x_gemini_key), "mock": ai.is_mock(x_gemini_key)}
     except AIError as e:
         raise HTTPException(502, str(e))
+
+
+# ---------------------------------------------------------------- order assistant (chatbot)
+class Brief(BaseModel):
+    """The order brief the assistant fills in. No defaults: Gemini's response_schema does not accept them."""
+    purpose: str
+    product: str
+    motif: str
+    colours: str
+    dye: str
+    size: str
+    quantity: str
+    deadline: str
+    notes: str
+    format: str
+    palette: str
+    image_prompt: str
+
+
+class ChatReply(BaseModel):
+    reply: str
+    ready: bool
+    brief: Brief
+    suggestions: list[str]
+
+
+class ChatMsg(BaseModel):
+    role: str                           # "user" (the customer) | "model" (the assistant)
+    text: str = Field(default="", max_length=2000)
+    image: str | None = None            # data URL of a sketch / photo the customer attached
+
+
+class ChatIn(BaseModel):
+    messages: list[ChatMsg] = Field(default_factory=list, max_length=40)
+    shop: str = Field(default="Batik UMKM", max_length=80)
+    lang: str = "id"
+
+
+def _empty_brief(**kw) -> dict:
+    return {**{k: "" for k in Brief.model_fields}, "format": "tile", **kw}
+
+
+def _clean_brief(b: dict) -> dict:
+    b = {**_empty_brief(), **{k: (v or "").strip() if isinstance(v, str) else v for k, v in b.items()}}
+    b["format"] = b["format"] if b["format"] in prompts.FORMATS else "tile"
+    b["palette"] = b["palette"] if b["palette"] in prompts.PALETTES else ""
+    b["dye"] = b["dye"] if b["dye"] in prompts.DYE_RULES else ""
+    return b
+
+
+def _mock_chat(msgs: list[ChatMsg], lang: str) -> dict:
+    """Scripted assistant for mock mode: asks the next question and fills the brief from the answers in order."""
+    answers = [m.text.strip() or "(sketsa)" for m in msgs if m.role == "user"]
+    has_sketch = any(m.image for m in msgs if m.role == "user")
+    b = _empty_brief()
+    for field, ans in zip(["purpose", "product", "motif", "colours", "size"], answers):
+        b[field] = ans
+    low = " ".join(answers).lower()
+    if any(w in low for w in ("panjang", "long cloth", "jarik")):
+        b["format"] = "kain"
+    elif any(w in low for w in ("selendang", "shawl", "scarf")):
+        b["format"] = "selendang"
+    for words, key in [(("soga", "cokelat", "coklat", "brown"), "soga"), (("indigo", "biru", "blue", "nila"), "indigo"),
+                       (("merah", "red"), "pesisir"), (("hijau", "green"), "hijau"), (("pastel", "pink"), "modern"),
+                       (("mahoni",), "mahoni"), (("kuning", "yellow"), "tegeran"), (("hitam", "black"), "mono")]:
+        if any(w in b["colours"].lower() for w in words):
+            b["palette"] = key
+            break
+    if any(w in low for w in ("alam", "natural")):
+        b["dye"] = "alam"
+    elif any(w in low for w in ("sintetis", "synthetic", "cerah", "bright")):
+        b["dye"] = "sintetis"
+    for k, m in prompts.MOTIFS.items():
+        if m["name"].lower() in b["motif"].lower():
+            b["motif"] = m["name"]
+    b["image_prompt"] = f"{b['motif'] or 'batik'} batik motif for {b['purpose'] or 'daily wear'}, colours: {b['colours'] or 'traditional'}" \
+        + (", based on the customer's sketch" if has_sketch else "")
+    ready = len(answers) >= 4
+    if ready and len(answers) >= 5:
+        reply = ("Terima kasih, Kak! Ringkasan pesanan sudah lengkap. Tekan **Lihat pratinjau** untuk melihat contoh desain dari AI. "
+                 "Harga dan waktu pengerjaan nanti dikonfirmasi langsung oleh pengrajin." if lang == "id" else
+                 "Thank you! The order summary is complete. Press **Show previews** to see AI design examples. "
+                 "The maker will confirm price and time.")
+        sugg = []
+    else:
+        reply, sugg = prompts.chat_mock_question(len(answers), lang)
+        if ready:
+            reply = ("Ringkasannya sudah cukup untuk pratinjau. " if lang == "id" else "That's enough for previews. ") + reply
+    return {"reply": reply, "ready": ready, "brief": b, "suggestions": sugg, "mock": True}
+
+
+@app.post("/api/chat")
+async def chat(body: ChatIn, x_gemini_key: str | None = Header(default=None)):
+    lang = "en" if body.lang == "en" else "id"
+    if not any(m.role == "user" for m in body.messages):  # opening greeting: no AI call needed
+        q, sugg = prompts.chat_mock_question(0, lang)
+        return {"reply": q, "ready": False, "brief": _empty_brief(), "suggestions": sugg, "mock": ai.is_mock(x_gemini_key)}
+    if ai.is_mock(x_gemini_key):
+        await asyncio.sleep(0.5)
+        return _mock_chat(body.messages, lang)
+
+    msgs = [(m.role, m.text, decode_data_url(m.image) if m.image else None) for m in body.messages]
+    if msgs[0][0] == "model":  # Gemini wants the conversation to start with the user
+        msgs.insert(0, ("user", "(Pelanggan membuka chat pesanan.)", None))
+    try:
+        out = await ai.chat(prompts.chat_system(body.shop, lang), msgs, ChatReply, api_key=x_gemini_key)
+    except AIError as e:
+        raise HTTPException(502, str(e))
+    out = out.model_dump() if hasattr(out, "model_dump") else dict(out)
+    return {"reply": out["reply"], "ready": bool(out["ready"]), "brief": _clean_brief(out["brief"]),
+            "suggestions": [s for s in out.get("suggestions", []) if s][:4], "mock": False}
+
+
+# ---------------------------------------------------------------- tracing pattern (pola nyorek)
+class LineArtIn(BaseModel):
+    image_data: str
+    model: str | None = None
+
+
+@app.post("/api/lineart")
+async def lineart(body: LineArtIn, x_gemini_key: str | None = Header(default=None)):
+    original = decode_data_url(body.image_data)
+    t0 = time.perf_counter()
+    if ai.is_mock(x_gemini_key):
+        png = await asyncio.to_thread(mock_lineart, original)
+    else:
+        size = "2K" if nearest_size(original) != "1K" else "1K"
+        try:
+            png = await ai.image(prompts.LINEART_PROMPT, [("original design", original)], aspect=nearest_aspect(original),
+                                 model=body.model, size=size, api_key=x_gemini_key)
+        except AIError as e:
+            raise HTTPException(502, str(e))
+    ms = int((time.perf_counter() - t0) * 1000)
+    return image_out(png, ms=ms, mock=ai.is_mock(x_gemini_key))
 
 
 # ---------------------------------------------------------------- static (local only; on Vercel the CDN serves public/)

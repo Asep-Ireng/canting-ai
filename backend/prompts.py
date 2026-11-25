@@ -63,6 +63,20 @@ PALETTES = {
     "hijau":   ("forest green: pale ground, leaf green, olive gold, dark green lines, rust accents", ["#EFE8CF", "#16301F", "#3E7A52", "#B89A3E", "#8A4B2A"]),
     "modern":  ("modern pastel: blush ground, dusty pink, powder blue, butter yellow, plum lines", ["#FBEFEA", "#4F3F5F", "#E39AA3", "#9FB8D9", "#F4D58D"]),
     "mono":    ("monochrome: off-white ground, black and charcoal, soft grey", ["#F4F1EA", "#111111", "#2B2B2B", "#8D8D8D", "#D6D1C6"]),
+    # natural-dye palettes (pewarna alam)
+    "mahoni":  ("natural mahogany-bark dye: warm beige ground, reddish brown, dusty rose-brown, dark brown lines", ["#E8D6BC", "#3B1F17", "#8C3F2B", "#B97A62", "#F1E4CE"]),
+    "tegeran": ("natural tegeran / jelawe dye: unbleached ground, mustard yellow, olive brown, dark umber lines", ["#EFE2BF", "#3A2C14", "#B8902C", "#7D6A32", "#F7EED6"]),
+    "tingi":   ("natural tingi-bark and indigo overdye: pale ecru ground, deep brown-black, rusty red-brown, faded blue", ["#ECE1CB", "#1E1612", "#7E3A22", "#4F6688", "#F5EDDC"]),
+    # synthetic-dye palette (naptol / remazol)
+    "cerah":   ("bright synthetic remazol: white ground, magenta, turquoise, orange, deep purple lines", ["#FFF8F2", "#3E1A4F", "#D6267A", "#16A6A0", "#F28C28"]),
+}
+
+# Which dye family each palette belongs to (customers mostly ask "pewarna alam atau sintetis?").
+DYE_OF = {"soga": "alam", "indigo": "alam", "mahoni": "alam", "tegeran": "alam", "tingi": "alam",
+          "pesisir": "sintetis", "hijau": "sintetis", "modern": "sintetis", "cerah": "sintetis", "mono": "sintetis"}
+DYE_RULES = {
+    "alam": "Natural dyes (pewarna alam): muted, earthy, slightly uneven dye tones with soft colour bleeding; no neon or saturated colours.",
+    "sintetis": "Synthetic dyes (naptol / remazol): clean, even, saturated colours are fine.",
 }
 
 DENSITY = {
@@ -138,7 +152,8 @@ def palette_text(key: str | None) -> str:
 
 
 def generate_prompt(*, user_prompt: str, template: dict | None, palette: str | None, density: str,
-                    variation: int, n_template_refs: int, n_user_refs: int, has_sketch: bool, format: str = "tile") -> str:
+                    variation: int, n_template_refs: int, n_user_refs: int, has_sketch: bool, format: str = "tile",
+                    dye: str | None = None) -> str:
     f = fmt(format)
     parts = ["You are a master Javanese batik designer creating a new design for a small batik business (UMKM)."]
     if template:
@@ -155,6 +170,9 @@ def generate_prompt(*, user_prompt: str, template: dict | None, palette: str | N
     if user_prompt.strip():
         parts.append(f"User request: \"{user_prompt.strip()}\"")
     parts.append(palette_text(palette))
+    dye = dye if dye in DYE_RULES else DYE_OF.get(palette or "")
+    if dye:
+        parts.append(DYE_RULES[dye])
     parts.append(f"Density: {DENSITY.get(density, DENSITY['medium'])}.")
     parts.append(f"Variation style: {VARIATIONS[variation % len(VARIATIONS)]}")
     parts.append(f["layout"])
@@ -186,3 +204,71 @@ def caption_prompt(*, name: str, motif: str, origin: str, meaning: str, product:
         "a line on how to order (DM / WhatsApp), then 4-6 relevant hashtags. Max 90 words. "
         "Do not invent prices, materials or claims you were not given. Output only the caption."
     )
+
+
+# ---------------------------------------------------------------- order assistant (chatbot for customers)
+ORDER_FIELDS = ["purpose", "product", "motif", "colours", "dye", "size", "quantity", "deadline", "notes"]
+
+
+def chat_system(shop: str, lang: str) -> str:
+    language = "Indonesian (casual, polite, like a friendly shop assistant; use 'Kak')" if lang == "id" else "English"
+    motifs = "; ".join(f"{m['name']} ({m['origin']['en']}): {m['meaning']['en']}" for m in MOTIFS.values())
+    palettes = ", ".join(f"{k} = {v[0].split(':')[0]}" for k, v in PALETTES.items())
+    return f"""You are the order assistant ("Asisten Pesanan") of {shop}, a small hand-made batik tulis business (UMKM).
+You chat with a CUSTOMER who wants a custom batik order. Reply in {language}.
+
+Goal: help the customer explain clearly what they want, so the batik maker (pengrajin) can draw it by hand with fewer
+revisions. You do not replace the maker: say the maker draws the final batik by hand and confirms price and time.
+
+Ask ONE short question at a time (max 2-3 sentences per reply), in this rough order, skipping what is already known:
+1. purpose / occasion (wedding, office uniform, gift, daily wear ...)
+2. product (shirt fabric, kain panjang, selendang/shawl, dress, uniform for a group ...)
+3. motif or theme (offer 2-3 fitting classic motifs with a one-line meaning, or their own idea / sketch)
+4. colours, and natural dye (pewarna alam: softer, earthy) vs synthetic dye (sintetis: brighter, cheaper)
+5. size and quantity, 6. deadline.
+If the customer attached a sketch or photo, say briefly what you see and use it as the main motif idea.
+Never invent prices or promise a finish date; say the maker will confirm them.
+
+Classic motifs you can explain: {motifs}
+Palette keys: {palettes}
+
+Set ready=true once purpose, product, motif/theme and colours are known (size/quantity/deadline may stay empty).
+When ready, tell the customer you can now show AI previews and they can pick one or ask for changes.
+Always fill the brief with everything known so far (empty string if unknown), written in the reply language
+(except image_prompt, which is always English).
+brief.format: "kain" for kain panjang / long cloth, "selendang" for a shawl, "pinggiran" for a border strip,
+otherwise "tile" (a repeat pattern for shirt fabric, dress, uniform).
+brief.palette: the closest palette key, or "" if none fits. brief.dye: "alam", "sintetis" or "".
+brief.image_prompt: 1-3 English sentences describing the motif, mood and colours for an image generator
+(no layout or format words).
+suggestions: 2-4 very short reply options the customer can tap (in the reply language)."""
+
+
+def chat_mock_question(step: int, lang: str) -> tuple[str, list[str]]:
+    """Scripted questions for mock mode (no key): (question, quick replies)."""
+    id_ = lang == "id"
+    qs = [
+        ("Halo Kak! 👋 Batiknya untuk acara atau keperluan apa?" if id_ else "Hi! 👋 What is the batik for?",
+         ["Pernikahan", "Seragam kantor", "Hadiah", "Dipakai sehari-hari"] if id_ else ["Wedding", "Office uniform", "Gift", "Daily wear"]),
+        ("Siap. Mau dibuat jadi apa, Kak?" if id_ else "Great. What will it be made into?",
+         ["Kain kemeja", "Kain panjang", "Selendang", "Dress"] if id_ else ["Shirt fabric", "Long cloth", "Shawl", "Dress"]),
+        ("Motifnya mau seperti apa? Misalnya Truntum (cinta yang tumbuh kembali, cocok untuk pernikahan), Parang (keteguhan), "
+         "atau Kawung (kesucian). Boleh juga kirim sketsa sendiri." if id_ else
+         "What kind of motif? For example Truntum (love that blossoms anew, good for weddings), Parang (perseverance) "
+         "or Kawung (purity). You can also send your own sketch.",
+         ["Truntum", "Parang", "Kawung", "Ide sendiri"] if id_ else ["Truntum", "Parang", "Kawung", "My own idea"]),
+        ("Warnanya mau apa, dan pakai pewarna alam (lebih lembut) atau sintetis (lebih cerah)?" if id_ else
+         "Which colours, and natural dye (softer) or synthetic (brighter)?",
+         ["Soga cokelat, alam", "Biru indigo, alam", "Merah cerah, sintetis"] if id_ else ["Soga brown, natural", "Indigo blue, natural", "Bright red, synthetic"]),
+        ("Ukuran dan jumlahnya berapa, Kak? Dan kapan dibutuhkan?" if id_ else "What size and how many? And when do you need it?",
+         ["2 meter, 1 lembar", "10 potong seragam", "Belum tahu"] if id_ else ["2 metres, 1 piece", "10 uniform pieces", "Not sure yet"]),
+    ]
+    return qs[min(step, len(qs) - 1)]
+
+
+LINEART_PROMPT = (
+    "Convert the batik design labelled 'original design' into a clean tracing pattern (pola) for a batik maker, who will "
+    "trace it onto cloth with a pencil before drawing it with a canting. Output: pure black outlines on a pure white "
+    "background, every motif shape and isen-isen detail kept as a clear line, consistent line weight, NO colour, NO grey, "
+    "NO shading or filled areas, no texture. Keep exactly the same composition, size and positions as the original."
+)

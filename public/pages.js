@@ -192,6 +192,7 @@ pages.dashboard = {
         <div class="sechead"><h3>${L('Mulai cepat','Quick start')}</h3></div>
         <div class="quick stagger">
           <a class="card qa" href="#/studio"><div class="ic">${ico('sparkle',22)}</div><div><b>${L('Generate motif baru','Generate a new motif')}</b><small>${L('Dari template, teks, foto, atau sketsa','From a template, text, photo or sketch')}</small></div></a>
+          <a class="card qa" href="#/orders"><div class="ic">${ico('chat',22)}</div><div><b>${L('Pesanan khusus pelanggan','Custom customer orders')}</b><small>${state.orders.length} ${L('pesanan','orders')} · ${state.orders.filter(o=>o.status==='sent'||o.status==='revision').length} ${L('menunggu','waiting')}</small></div></a>
           <a class="card qa" href="#/templates" data-newtpl><div class="ic">${ico('layers',22)}</div><div><b>${L('Buat template motif','Create a motif template')}</b><small>${L('Misalnya motif khas daerahmu','e.g. your regional motif')}</small></div></a>
           <a class="card qa" href="#/editor"><div class="ic">${ico('edit',22)}</div><div><b>${L('Sunting desain terakhir','Edit your latest design')}</b><small>${esc(dn(state.current))}</small></div></a>
           <a class="card qa" href="#/mockup"><div class="ic">${ico('shirt',22)}</div><div><b>${L('Buat mockup produk','Create a product mockup')}</b><small>${L('Kemeja, dress, tote, kain','Shirt, dress, tote, cloth')}</small></div></a>
@@ -254,8 +255,11 @@ pages.studio = {
         <div class="attach">${s.refs.map((r,i)=>`<div class="th"><img src="${r}" alt=""><b>${L('acuan','ref')}</b><button data-rmref="${i}" aria-label="${L('Hapus','Remove')}">×</button></div>`).join('')}${s.sketch?`<div class="th"><img src="${s.sketch}" alt=""><b>${L('sketsa','sketch')}</b><button id="rmsketch" aria-label="${L('Hapus','Remove')}">×</button></div>`:''}</div>
         <label class="lbl">${L('Format','Format')}</label>
         <div class="fmt-list">${Object.entries(FORMATS).map(([k,f])=>`<button class="fmt ${s.format===k?'on':''}" data-fmt="${k}">${fmtIcon(f.ar,22)}<span><b>${tr(f.label)}</b><small>${tr(f.sub)}</small></span></button>`).join('')}</div>
+        <label class="lbl">${L('Pewarna','Dye')}</label>
+        <div class="seg" id="dye">${Object.entries(DYES).map(([k,v])=>`<button data-v="${k}" class="${s.dye===k?'on':''}">${tr(v)}</button>`).join('')}</div>
+        <p class="hint" style="margin-top:6px">${s.dye==='alam'?L('Pewarna alam: warna lebih lembut dan bersahaja (soga, nila, mahoni, tegeran, tingi).','Natural dye: softer, earthy colours (soga, indigo, mahogany, tegeran, tingi).'):s.dye==='sintetis'?L('Sintetis (naptol / remazol): warna lebih cerah dan rata.','Synthetic (naptol / remazol): brighter, even colours.'):L('Pelanggan biasanya hanya bertanya: pewarna alam atau sintetis?','Customers usually only ask: natural or synthetic dye?')}</p>
         <label class="lbl">${L('Palet warna','Colour palette')}</label>
-        <div class="pal-list"><button class="pal ${s.pal==='auto'?'on':''}" data-pal="auto"><span class="sw auto"></span>${tplMode?L('Ikuti template','Follow template'):L('Otomatis','Automatic')}</button>${Object.entries(PALETTES).map(([k,v])=>`<button class="pal ${s.pal===k?'on':''}" data-pal="${k}"><span class="sw">${['bg','primary','secondary','accent'].map(x=>`<i style="background:${v.c[x]}"></i>`).join('')}</span>${tr(v.label)}</button>`).join('')}</div>
+        <div class="pal-list"><button class="pal ${s.pal==='auto'?'on':''}" data-pal="auto"><span class="sw auto"></span>${tplMode?L('Ikuti template','Follow template'):L('Otomatis','Automatic')}</button>${Object.entries(PALETTES).filter(([k,v])=>s.dye==='bebas'||v.dye===s.dye).map(([k,v])=>`<button class="pal ${s.pal===k?'on':''}" data-pal="${k}"><span class="sw">${['bg','primary','secondary','accent'].map(x=>`<i style="background:${v.c[x]}"></i>`).join('')}</span>${tr(v.label)}</button>`).join('')}</div>
         <div class="mgrid" style="gap:10px">
           <div><label class="lbl">${L('Kerapatan','Density')}</label><div class="seg" id="density">${[['sparse',L('Jarang','Sparse')],['medium',L('Sedang','Medium')],['dense',L('Rapat','Dense')]].map(([v,l])=>`<button data-v="${v}" class="${s.density===v?'on':''}">${l}</button>`).join('')}</div></div>
           <div><label class="lbl">${L('Jumlah variasi','Variations')}</label><div class="seg" id="count">${[1,2,4].map(n=>`<button data-v="${n}" class="${s.count===n?'on':''}">${n}</button>`).join('')}</div></div>
@@ -283,6 +287,7 @@ pages.studio = {
     $$('[data-pal]').forEach(b=>b.addEventListener('click',()=>{ s.pal=b.dataset.pal; rerender(); }));
     $$('[data-fmt]').forEach(b=>b.addEventListener('click',()=>{ s.format=b.dataset.fmt; rerender(); }));
     $$('#density button').forEach(b=>b.addEventListener('click',()=>{ s.density=b.dataset.v; rerender(); }));
+    $$('#dye button').forEach(b=>b.addEventListener('click',()=>{ s.dye=b.dataset.v; if(s.pal!=='auto' && s.dye!=='bebas' && PALETTES[s.pal].dye!==s.dye) s.pal='auto'; rerender(); }));
     $$('#count button').forEach(b=>b.addEventListener('click',()=>{ s.count=+b.dataset.v; rerender(); }));
     const addFiles=async files=>{
       keep();
@@ -314,7 +319,7 @@ async function runGenerate(){
   const btn=$('#gen'); if(btn) btn.disabled=true;
   renderResults();
   const body={prompt:s.prompt, template_id:tpl&&tpl.builtin?tpl.id:null,
-    template: tpl&&!tpl.builtin ? {name:tpl.name, description:tpl.description, palette:tpl.palette||null, refs:(tpl.ref_images||[]).slice(0,3)} : null, palette:s.pal==='auto'?null:s.pal, density:s.density, format:s.format, references:s.refs, sketch:s.sketch, model:state.aiModel, size:state.aiSize};
+    template: tpl&&!tpl.builtin ? {name:tpl.name, description:tpl.description, palette:tpl.palette||null, refs:(tpl.ref_images||[]).slice(0,3)} : null, palette:s.pal==='auto'?null:s.pal, dye:s.dye==='bebas'?null:s.dye, density:s.density, format:s.format, references:s.refs, sketch:s.sketch, model:state.aiModel, size:state.aiSize};
   await Promise.all(s.results.map(async (slot,i)=>{
     try{ const r=await api('/api/generate',{...body, variation:i}); slot.status='done'; slot.d=resultDesign(r,i); logGen(r.ms, true); }
     catch(e){ slot.status='error'; slot.error=e.message; logGen(0, false); }
@@ -420,6 +425,8 @@ pages.editor = {
     <div class="ph"><div><h1>${L('Editor Desain','Design Editor')}</h1><p>${L('Minta AI mengubah desain, tandai bagian tertentu dengan marker, atau atur warna dan skala.','Ask the AI to change the design, mark specific parts with a marker, or adjust colour and scale.')}</p></div><div class="sp"></div>
       <button class="btn ghost" id="png">${ico('download')} PNG</button>
       <button class="btn ghost" id="astpl">${ico('layers')} ${L('Jadikan template','Make template')}</button>
+      <button class="btn ghost" id="pola">${ico('ruler')} ${L('Pola nyorek','Tracing pattern')}</button>
+      ${d.order_id && state.orders.some(o=>o.id===d.order_id) ? `<button class="btn soga" id="use-order">${ico('chat')} ${L('Pakai untuk pesanan','Use for the order')}</button>` : ''}
       <button class="btn ghost" id="save">${ico('save')} ${L('Simpan','Save')}</button>
       <a class="btn primary" href="#/watermark">${L('Lanjut ke Watermark','Continue to Watermark')} ${ico('arrow')}</a></div>
     <div class="ed-grid">
@@ -495,6 +502,8 @@ pages.editor = {
     $('#ai-go').addEventListener('click',()=>aiEdit($('#ai-text').value));
     $('#save').addEventListener('click',()=>saveDesign(d));
     $('#astpl').addEventListener('click',()=>saveAsTemplate(d));
+    $('#pola').addEventListener('click',()=>tracingModal(d));
+    $('#use-order')?.addEventListener('click',()=>useInOrder(d));
     $('#png').addEventListener('click',()=>exportPNG(batikSVG(d,{size:640,natural:true}),(dn(d)||'design')+'.png',1400,arOf(d)));
   }
 };
