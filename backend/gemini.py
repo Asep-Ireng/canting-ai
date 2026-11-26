@@ -55,11 +55,14 @@ class GeminiAI:
 
     def _client(self, api_key: str | None):
         from google import genai
+        from google.genai import types
+        # system_instruction is only accepted on v1beta; pin it so SDK defaults can't switch us to v1
+        http = types.HttpOptions(api_version="v1beta")
         key = (api_key or "").strip()
         if key:  # a visitor's key: a fresh client per request, never stored
-            return genai.Client(api_key=key)
+            return genai.Client(api_key=key, http_options=http)
         if self._server_client is None:
-            self._server_client = genai.Client(api_key=self.api_key)
+            self._server_client = genai.Client(api_key=self.api_key, http_options=http)
         return self._server_client
 
     async def check_key(self, api_key: str) -> None:
