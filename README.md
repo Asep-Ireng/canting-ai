@@ -44,6 +44,7 @@ for very large 4K results), and inputs are shrunk in the browser before sending.
 | Generate from a **template** (Kawung, Parang, Mega Mendung, Truntum, Sekar Jagad, Ceplok, or your own) | Gemini image model, 1–4 variations in parallel, each with a different composition hint |
 | Generate from **text**, a **reference photo**, and/or a **marker sketch** | All sent to Gemini as labelled images + a structured prompt (`backend/prompts.py`) |
 | **Formats** | Ubin / tile (1:1 seamless repeat), Kain panjang (16:9 full cloth with tumpal end panel), Selendang (9:16 shawl with a central motif), Pinggiran (21:9 border strip that repeats sideways). Sent to Gemini as the aspect ratio + a layout rule. Edits keep the original shape. |
+| **Creativity** slider + **web search** | Creativity (Faithful → Wild) sets the temperature (0.3–1.7) and switches to bolder variation directions; "Search the web" turns on Google Search grounding (web + image search) so Gemini looks up real motifs, flowers or animals first, with the sources listed under each result (Nano Banana 2 / 2.1 only) |
 | **Model and resolution** | Nano Banana 2.1 / 2 / 2 Lite, 1K / 2K / 4K; sizes a model can't do are greyed out |
 | **Templates** | Create, edit, delete, "New style" from a built-in, "Make template" from any design; saved in the browser |
 | **Edit with AI** + **mark what to change** | Gemini image editing; marker strokes limit the change to the marked area; version history |

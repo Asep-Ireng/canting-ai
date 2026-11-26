@@ -4,10 +4,12 @@ If no API key is configured (or MOCK_AI=1), a local mock is used instead so
 the app can be demoed and tested without spending credits.
 """
 import asyncio
+import html
 import io
 import math
 import os
 import random
+import re
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -17,9 +19,10 @@ from prompts import PALETTES
 # Image models the UI may pick from. Anything else falls back to IMAGE_MODEL.
 # sizes = output resolutions the model accepts (tested 2026-11-04: Lite rejects 2K with a 400).
 IMAGE_MODELS = {
-    "gemini-nano-banana-2.1": {"label": "Nano Banana 2.1", "sizes": ["1K", "2K", "4K"]},
-    "gemini-3.1-flash-image": {"label": "Nano Banana 2", "sizes": ["1K", "2K", "4K"]},
-    "gemini-3.1-flash-lite-image": {"label": "Nano Banana 2 Lite", "sizes": ["1K"]},
+    # grounding: accepts the Google Search tool (web + image search); Lite rejects it
+    "gemini-nano-banana-2.1": {"label": "Nano Banana 2.1", "sizes": ["1K", "2K", "4K"], "grounding": True},
+    "gemini-3.1-flash-image": {"label": "Nano Banana 2", "sizes": ["1K", "2K", "4K"], "grounding": True},
+    "gemini-3.1-flash-lite-image": {"label": "Nano Banana 2 Lite", "sizes": ["1K"], "grounding": False},
 }
 SIZE_PX = {"1K": 1024, "2K": 2048, "4K": 4096}
 MAX_INPUT_PX = 1536  # input images are shrunk to this before sending, so 4K results never blow the request size
@@ -78,8 +81,11 @@ class GeminiAI:
     # ---------- images ----------
     async def image(self, prompt: str, labelled_images: list[tuple[str, bytes]], palette: str | None = None,
                     aspect: str = "1:1", model: str | None = None, size: str | None = None,
-                    api_key: str | None = None) -> bytes:
-        """labelled_images: [(label, png_or_jpeg_bytes), ...] sent before the prompt."""
+                    api_key: str | None = None, temperature: float | None = None, grounding: bool = False,
+                    info: dict | None = None) -> bytes:
+        """labelled_images: [(label, png_or_jpeg_bytes), ...] sent before the prompt.
+        grounding: let the model look things up with Google Search (web + images) first; ignored by models without it.
+        info: if given, filled with {"grounding": {"queries": [...], "sources": [...]}} when search was used."""
         model = model if model in IMAGE_MODELS else self.image_model
         size = size_for(model, size)
         if self.is_mock(api_key):
@@ -94,6 +100,11 @@ class GeminiAI:
         contents.append(prompt)
 
         config = types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"])
+        if temperature is not None:
+            config.temperature = temperature
+        if grounding and IMAGE_MODELS[model].get("grounding"):
+            config.tools = [types.Tool(google_search=types.GoogleSearch(search_types=types.SearchTypes(
+                web_search=types.WebSearch(), image_search=types.ImageSearch())))]
         try:
             config.image_config = types.ImageConfig(aspect_ratio=aspect, **({"image_size": size} if size else {}))
         except Exception:  # older SDKs / models without image_config
@@ -105,6 +116,10 @@ class GeminiAI:
         except Exception as e:  # network, quota, invalid key, bad model id …
             raise AIError(_friendly(e)) from e
 
+        if info is not None and resp.candidates:
+            g = _grounding(resp.candidates[0])
+            if g:
+                info["grounding"] = g
         for cand in resp.candidates or []:
             for part in (cand.content.parts if cand.content else []) or []:
                 if getattr(part, "inline_data", None) and part.inline_data.data:
@@ -152,6 +167,28 @@ class GeminiAI:
             return schema.model_validate_json(resp.text or "")
         except Exception as e:
             raise AIError("Jawaban asisten tidak terbaca. Coba kirim ulang pesannya.") from e
+
+
+def _grounding(cand) -> dict | None:
+    """Search queries and source pages from a grounded answer, for attribution in the UI."""
+    gm = getattr(cand, "grounding_metadata", None)
+    if not gm:
+        return None
+    clean = lambda t: html.unescape(re.sub(r"<[^>]+>", "", t or "")).strip()
+    sources, seen = [], set()
+    for ch in gm.grounding_chunks or []:
+        src = ch.web or ch.image
+        if not src:
+            continue
+        url = getattr(src, "uri", None) or getattr(src, "source_uri", None)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        sources.append({"title": clean(src.title) or src.domain or url, "url": url, "domain": src.domain or ""})
+    queries = list(dict.fromkeys((gm.web_search_queries or []) + (gm.image_search_queries or [])))
+    if not (sources or queries):
+        return None
+    return {"queries": queries[:6], "sources": sources[:8]}
 
 
 def _shrink(data: bytes) -> bytes:

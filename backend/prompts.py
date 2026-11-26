@@ -93,6 +93,31 @@ VARIATIONS = [
     "A contemporary reinterpretation: simplified shapes, stronger contrast, still clearly batik.",
 ]
 
+# At high creativity the 4 variations take bolder, more different directions.
+WILD_VARIATIONS = [
+    "An unexpected composition: break the regular grid with a diagonal or radial flow, while keeping a clean repeat.",
+    "Mix in a second, contrasting batik tradition (e.g. coastal pesisir flora with court motifs) in one design.",
+    "Play with scale: one oversized hero motif with tiny isen-isen worlds inside it.",
+    "A bold contemporary take: abstracted, geometric shapes and daring colour placement, still hand-drawn batik.",
+]
+
+
+def creativity_text(c: int) -> str:
+    if c <= 30:
+        return ("Creativity: LOW. Stay close to the classic pakem of the template: traditional proportions, "
+                "familiar motif shapes, no experimental elements.")
+    if c >= 70:
+        return ("Creativity: HIGH. Take bold creative liberties: surprising compositions, inventive motif combinations "
+                "and fresh details nobody has seen before, while staying recognisably batik tulis.")
+    return "Creativity: balanced. Respect the tradition but add a fresh, original touch."
+
+
+GROUNDING_RULE = (
+    "Before drawing, use Google Search (web and images) to look up real references for what is named above: authentic "
+    "examples of the batik motif and the real appearance of any flower, animal, place or object mentioned. Base shapes and "
+    "details on what you find so they are accurate, but create an ORIGINAL batik design; never copy a found image."
+)
+
 STYLE_RULES = (
     "Look like real Javanese batik tulis: hand-drawn wax-resist lines made with a canting, slightly irregular line weight, "
     "fine isen-isen fills (dots, short lines), and subtle dye crackle texture. Flat cloth viewed straight from above, "
@@ -153,7 +178,7 @@ def palette_text(key: str | None) -> str:
 
 def generate_prompt(*, user_prompt: str, template: dict | None, palette: str | None, density: str,
                     variation: int, n_template_refs: int, n_user_refs: int, has_sketch: bool, format: str = "tile",
-                    dye: str | None = None) -> str:
+                    dye: str | None = None, creativity: int = 50, grounding: bool = False) -> str:
     f = fmt(format)
     parts = ["You are a master Javanese batik designer creating a new design for a small batik business (UMKM)."]
     if template:
@@ -174,7 +199,11 @@ def generate_prompt(*, user_prompt: str, template: dict | None, palette: str | N
     if dye:
         parts.append(DYE_RULES[dye])
     parts.append(f"Density: {DENSITY.get(density, DENSITY['medium'])}.")
-    parts.append(f"Variation style: {VARIATIONS[variation % len(VARIATIONS)]}")
+    hints = WILD_VARIATIONS if creativity >= 70 else VARIATIONS
+    parts.append(f"Variation style: {hints[variation % len(hints)]}")
+    parts.append(creativity_text(creativity))
+    if grounding:
+        parts.append(GROUNDING_RULE)
     parts.append(f["layout"])
     parts.append(STYLE_RULES)
     return "\n".join(parts)

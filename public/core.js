@@ -52,6 +52,7 @@ const IC = {
   refresh:'<path d="M20 11a8 8 0 0 0-14-4L4 9M4 4v5h5M4 13a8 8 0 0 0 14 4l2-2M20 20v-5h-5"/>',
   cpu:'<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
   chat:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
   send:'<path d="M4 12l16-8-6 16-3-7z"/><path d="M11 13l9-9"/>',
   ruler:'<path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
@@ -272,7 +273,7 @@ const UMKM = 'Batik Laras Ayu';
 const state = {
   designs: [], templates: [], orders: [], status: {mock:true, images:0, avg_ms:0},
   current: null,
-  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, refs:[], sketch:null, sketchStrokes:null, status:'idle', results:[], used:''},
+  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, creativity:50, grounding:false, refs:[], sketch:null, sketchStrokes:null, status:'idle', results:[], used:''},
   wm: {text:UMKM, pos:'br', opacity:.6, size:1, color:'#ffffff', invisible:true, owner:UMKM},
   mock: {bg:'#F3E9D2', scale:1}
 };
@@ -310,6 +311,7 @@ function bindModelSelect(root=document){
     $$('.model-pick').forEach(o=>{ o.value=s.value; });
     const side=$('#side-model'); if(side) side.textContent=modelLabel(s.value);
     clampSize(); const seg=$('#size-seg'); if(seg){ seg.outerHTML=sizePicker(); bindSizePicker(); }
+    if(typeof refreshGrounding==='function') refreshGrounding();
     toast(L('Model AI: ','AI model: ')+modelLabel(s.value));
   }));
 }

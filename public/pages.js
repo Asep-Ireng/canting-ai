@@ -230,7 +230,25 @@ function resultDesign(r, i){
   return {id:null, name:`${base}${fl}${palLabel?' '+palLabel:''} · ${'ABCD'[i]}`, image:r.data, format:s.format, w:r.w, h:r.h,
     template_id: tpl ? tpl.id : null, style: tpl && STYLES[tpl.id] ? tpl.id : null, pal:s.pal,
     scale:1, rotation:0, mirror:false, adjust:{...DEFAULT_ADJ}, protected:false, date:today(), prompt:s.prompt,
-    versions:[{image:r.data, w:r.w, h:r.h}], vi:0, ms:r.ms, mock:r.mock, model:r.model};
+    versions:[{image:r.data, w:r.w, h:r.h}], vi:0, ms:r.ms, mock:r.mock, model:r.model, grounding:r.grounding||null};
+}
+const creaLabel = c => c<=30 ? L('Setia pakem','Faithful') : c>=70 ? L('Liar','Wild') : L('Seimbang','Balanced');
+const groundingOK = () => !!(imageModels().find(m=>m.id===state.aiModel)||{}).grounding;
+function groundingRow(){
+  const s=state.studio, ok=groundingOK();
+  return `<label class="ground ${ok?'':'off'}" id="grounding-row"><input type="checkbox" id="grounding" ${s.grounding&&ok?'checked':''} ${ok?'':'disabled'}>
+    <span><b>${ico('search',15)} ${L('Cari referensi di web','Search the web for references')}</b>
+    <small>${ok ? L('Gemini mencari contoh motif asli, bunga, hewan, atau tempat di Google (web & gambar) sebelum menggambar. Sedikit lebih lama.','Gemini looks up real motif examples, flowers, animals or places on Google (web & images) before drawing. A little slower.')
+      : L('Tidak tersedia di model ini. Pilih Nano Banana 2 atau 2.1.','Not available on this model. Pick Nano Banana 2 or 2.1.')}</small></span></label>`;
+}
+function bindGrounding(){ $('#grounding')?.addEventListener('change',e=>{ state.studio.grounding=e.target.checked; }); }
+function refreshGrounding(){ const r=$('#grounding-row'); if(r){ r.outerHTML=groundingRow(); bindGrounding(); } }
+function sourcesHTML(g){
+  const src=(g&&g.sources)||[], qs=(g&&g.queries)||[];
+  if(!src.length && !qs.length) return '';
+  return `<details class="srcs"><summary>${ico('search',14)} ${L('Dicari di Google','Searched on Google')} · ${src.length ? `${src.length} ${L('sumber','source'+(src.length===1?'':'s'))}` : `${qs.length} ${L('pencarian','search'+(qs.length===1?'':'es'))}`}</summary>
+    ${qs.length?`<div class="q">${qs.map(q=>`<span>${esc(q)}</span>`).join('')}</div>`:''}
+    <ul>${src.map(x=>`<li><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a>${x.domain?` <i>${esc(x.domain)}</i>`:''}</li>`).join('')}</ul></details>`;
 }
 pages.studio = {
   html(){
@@ -264,6 +282,10 @@ pages.studio = {
           <div><label class="lbl">${L('Kerapatan','Density')}</label><div class="seg" id="density">${[['sparse',L('Jarang','Sparse')],['medium',L('Sedang','Medium')],['dense',L('Rapat','Dense')]].map(([v,l])=>`<button data-v="${v}" class="${s.density===v?'on':''}">${l}</button>`).join('')}</div></div>
           <div><label class="lbl">${L('Jumlah variasi','Variations')}</label><div class="seg" id="count">${[1,2,4].map(n=>`<button data-v="${n}" class="${s.count===n?'on':''}">${n}</button>`).join('')}</div></div>
         </div>
+        <label class="lbl">${L('Kreativitas','Creativity')} <span class="crea-val" id="crea-val">${creaLabel(s.creativity)}</span></label>
+        <input type="range" id="crea" min="0" max="100" step="10" value="${s.creativity}" aria-label="${L('Kreativitas','Creativity')}">
+        <div class="crea-scale"><span>${L('Setia pakem','Faithful')}</span><span>${L('Seimbang','Balanced')}</span><span>${L('Liar','Wild')}</span></div>
+        ${groundingRow()}
         ${imageModels().length ? `<label class="lbl">${L('Model AI','AI model')}</label>${modelSelect()}
           <label class="lbl">${L('Resolusi','Resolution')}</label>${sizePicker()}
           <p class="hint" style="margin-top:6px">${L('1K untuk layar; 2K/4K untuk cetak kain. Makin besar makin lama (4K sekitar 30–40 dtk) dan biasanya makin mahal.','1K for screens; 2K/4K for printing cloth. Bigger takes longer (4K about 30–40 s) and usually costs more.')}</p>` : ''}
@@ -289,6 +311,8 @@ pages.studio = {
     $$('#density button').forEach(b=>b.addEventListener('click',()=>{ s.density=b.dataset.v; rerender(); }));
     $$('#dye button').forEach(b=>b.addEventListener('click',()=>{ s.dye=b.dataset.v; if(s.pal!=='auto' && s.dye!=='bebas' && PALETTES[s.pal].dye!==s.dye) s.pal='auto'; rerender(); }));
     $$('#count button').forEach(b=>b.addEventListener('click',()=>{ s.count=+b.dataset.v; rerender(); }));
+    $('#crea').addEventListener('input',e=>{ s.creativity=+e.target.value; $('#crea-val').textContent=creaLabel(s.creativity); });
+    bindGrounding();
     const addFiles=async files=>{
       keep();
       for(const f of files){ if(s.refs.length>=2){ toast(L('Maksimal 2 foto acuan.','Max 2 reference photos.'),true); break; }
@@ -319,7 +343,7 @@ async function runGenerate(){
   const btn=$('#gen'); if(btn) btn.disabled=true;
   renderResults();
   const body={prompt:s.prompt, template_id:tpl&&tpl.builtin?tpl.id:null,
-    template: tpl&&!tpl.builtin ? {name:tpl.name, description:tpl.description, palette:tpl.palette||null, refs:(tpl.ref_images||[]).slice(0,3)} : null, palette:s.pal==='auto'?null:s.pal, dye:s.dye==='bebas'?null:s.dye, density:s.density, format:s.format, references:s.refs, sketch:s.sketch, model:state.aiModel, size:state.aiSize};
+    template: tpl&&!tpl.builtin ? {name:tpl.name, description:tpl.description, palette:tpl.palette||null, refs:(tpl.ref_images||[]).slice(0,3)} : null, palette:s.pal==='auto'?null:s.pal, dye:s.dye==='bebas'?null:s.dye, density:s.density, format:s.format, references:s.refs, sketch:s.sketch, model:state.aiModel, size:state.aiSize, creativity:s.creativity, grounding:s.grounding&&groundingOK()};
   await Promise.all(s.results.map(async (slot,i)=>{
     try{ const r=await api('/api/generate',{...body, variation:i}); slot.status='done'; slot.d=resultDesign(r,i); logGen(r.ms, true); }
     catch(e){ slot.status='error'; slot.error=e.message; logGen(0, false); }
@@ -362,6 +386,7 @@ function renderSlot(i, fresh){
   const natural = d.w && d.h ? ` style="aspect-ratio:${d.w}/${d.h};max-height:460px;object-fit:contain;background:#efe3c6"` : '';
   el.innerHTML=`<div class="svgbox ${fresh?'reveal':''}"><img src="${esc(d.image)}" alt="${esc(dn(d))}"${natural}></div>
     <h4>${esc(dn(d))}</h4><div class="meta">${isTile(d)?'':tr(FORMATS[d.format].label)+' · '}${d.model&&!d.mock?esc(modelLabel(d.model))+' · ':''}${d.w&&d.h?`${d.w}×${d.h} · `:''}${(d.ms/1000).toFixed(1)} ${L('dtk','s')}${d.mock?' · mock':''}${d.id?' · '+L('tersimpan','saved'):''}</div>
+    ${sourcesHTML(d.grounding)}
     <div class="row"><button class="btn primary sm" data-act="edit">${ico('edit',15)} Edit</button><button class="btn ghost sm" data-act="save">${ico('save',15)} ${L('Simpan','Save')}</button><button class="btn ghost sm" data-act="mock">${ico('shirt',15)} Mockup</button><button class="btn ghost sm" data-act="tpl" title="${L('Jadikan template untuk gaya baru','Make it a template for a new style')}">${ico('layers',15)} ${L('Jadikan template','Make template')}</button></div>`;
   $$('[data-act]',el).forEach(b=>b.addEventListener('click',async()=>{
     const a=b.dataset.act;

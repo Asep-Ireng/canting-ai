@@ -159,6 +159,8 @@ class GenerateIn(BaseModel):
     references: list[str] = Field(default_factory=list, max_length=3)  # data URLs
     sketch: str | None = None           # data URL
     dye: str | None = None              # "alam" (natural) | "sintetis" (synthetic) | None = from the palette
+    creativity: int = Field(default=50, ge=0, le=100)  # 0 = faithful to the template … 100 = wild; sets temperature + prompt
+    grounding: bool = False             # let Gemini look things up with Google Search (web + images) first
 
 
 @app.post("/api/generate")
@@ -175,18 +177,21 @@ async def generate(body: GenerateIn, x_gemini_key: str | None = Header(default=N
     text = prompts.generate_prompt(
         user_prompt=body.prompt, template=tpl, palette=body.palette, density=body.density,
         variation=body.variation, n_template_refs=len(tpl_refs), n_user_refs=len(body.references),
-        has_sketch=bool(body.sketch), format=body.format, dye=body.dye)
+        has_sketch=bool(body.sketch), format=body.format, dye=body.dye,
+        creativity=body.creativity, grounding=body.grounding)
 
+    info: dict = {}
     t0 = time.perf_counter()
     try:
         png = await ai.image(text, images, palette=body.palette or (tpl or {}).get("palette"),
                              aspect=prompts.fmt(body.format)["aspect"], model=body.model, size=body.size,
-                             api_key=x_gemini_key)
+                             api_key=x_gemini_key, temperature=round(0.3 + body.creativity * 0.014, 2),
+                             grounding=body.grounding, info=info)
     except AIError as e:
         raise HTTPException(502, str(e))
     ms = int((time.perf_counter() - t0) * 1000)
     return image_out(png, ms=ms, mock=ai.is_mock(x_gemini_key), variation=body.variation,
-                     format=body.format, model=model_used(body.model))
+                     format=body.format, model=model_used(body.model), **info)
 
 
 # ---------------------------------------------------------------- edit
