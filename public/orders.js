@@ -393,6 +393,7 @@ async function designSource(d){
 }
 /* draw the cloth area [x0,y0]-[x0+wcm,y0+hcm] (cm) of the pattern into a canvas */
 function drawCloth(c, img, T, x0, y0, wcm, hcm, ar){
+  c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
   c.fillStyle='#fff'; c.fillRect(0,0,wcm*PPC,hcm*PPC);
   c.save(); c.beginPath(); c.rect(0,0,Math.max(0,Math.min(wcm,T.w-x0))*PPC, Math.max(0,Math.min(hcm,T.h-y0))*PPC); c.clip();
   c.translate(-x0*PPC,-y0*PPC);
@@ -404,15 +405,34 @@ function drawCloth(c, img, T, x0, y0, wcm, hcm, ar){
   }
   c.restore();
 }
+/* line art only: after a smooth upscale, make every pixel pure black or white so lines print crisp, not grey and soft */
+function sharpenLines(c, w, h, cut=160){   // below 160 = line; faint compression specks stay white
+  const im=c.getImageData(0,0,w,h), a=im.data;
+  for(let i=0;i<a.length;i+=4){ const v=(a[i]*.3+a[i+1]*.59+a[i+2]*.11)<cut?0:255; a[i]=a[i+1]=a[i+2]=v; a[i+3]=255; }
+  c.putImageData(im,0,0);
+}
+async function sharpLinePNG(src, maxPx=8192){
+  const img=await loadImg(src), k=Math.max(1, Math.min(2, maxPx/Math.max(img.width,img.height)));
+  const cv=document.createElement('canvas'); cv.width=Math.round(img.width*k); cv.height=Math.round(img.height*k);
+  const c=cv.getContext('2d'); c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
+  c.drawImage(img,0,0,cv.width,cv.height); sharpenLines(c,cv.width,cv.height);
+  return cv.toDataURL('image/png');
+}
+const bestLineSize = () => { const m=imageModels().find(x=>x.id===state.aiModel); const s=(m&&m.sizes)||['1K']; return s.includes('4K')?'4K':s.at(-1); };
 function tracingModal(d){
   const ar=arOf(d), full=!isTile(d), def=CLOTH_DEFAULT[d.format||'tile']||CLOTH_DEFAULT.tile;
-  const T={ar, kind:'line', line:d.lineart||null, src:null, paper:'A4', area:full?'kain':'satu', full, w:def[0], h:full?Math.round(def[0]/ar):def[1], rep:20, busy:false};
+  const T={ar, kind:'line', line:lineFor(d), src:null, paper:'A4', area:full?'kain':'satu', full, w:def[0], h:full?Math.round(def[0]/ar):def[1], rep:20, busy:false,
+    res:bestLineSize(), sharp:true, px:{}};
   const m=openModal(L('Pola nyorek (cetak ukuran asli)','Tracing pattern (print at real size)'), `
     <p class="hint" style="margin-bottom:12px">${L('Ubah desain jadi garis hitam, cetak sesuai ukuran kain di beberapa lembar kertas, sambung, lalu jiplak ke kain dengan pensil sebelum mencanting. AI membantu pola, tangan pengrajin yang menggambar.','Turn the design into black lines, print it at the cloth’s real size over several sheets, join them, then trace onto the cloth with a pencil before the canting. The AI helps with the pattern; the maker’s hand does the drawing.')}</p>
     <div class="tr-grid"><div class="svgbox tr-prev" id="tr-prev"></div>
       <div>
         <div class="seg" id="tr-kind"><button data-v="line" class="on">${L('Garis pola','Line pattern')}</button><button data-v="color">${L('Warna asli','Original colours')}</button></div>
         <button class="btn soga block sm" id="tr-make" style="margin-top:10px">${ico('wand',15)} ${L('Buat garis pola','Make line pattern')}</button>
+        <div class="row" id="tr-opts" style="gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <span class="lbl" style="margin:0">${L('Resolusi garis','Line resolution')}</span>
+          <div class="seg" id="tr-res" style="min-width:150px">${['2K','4K'].map(s=>{ const ok=(imageModels().find(x=>x.id===state.aiModel)?.sizes||[]).includes(s); return `<button data-v="${s}" class="${T.res===s?'on':''}" ${ok?'':'disabled'}>${s}</button>`; }).join('')}</div>
+          <label class="tr-sharp"><input type="checkbox" id="tr-sharp" checked> ${L('Pertajam garis saat dicetak','Sharpen lines when printing')}</label></div>
         <p class="hint" style="margin-top:6px" id="tr-note">${aiMode()==='mock'?L('Mode mock: garis dibuat dengan deteksi tepi sederhana.','Mock mode: lines come from simple edge detection.'):L('Gemini menggambar ulang desain sebagai garis bersih.','Gemini redraws the design as clean lines.')}</p>
         <div class="mgrid" style="gap:10px;margin-top:6px">
           <div><label class="lbl">${L('Lebar kain (cm)','Cloth width (cm)')}</label><input type="number" id="tr-w" min="5" max="600" value="${T.w}"></div>
@@ -424,36 +444,49 @@ function tracingModal(d){
         <div class="note" id="tr-sum" style="margin-top:14px"></div>
         <div class="row wrap" style="margin-top:14px"><button class="btn primary sm" id="tr-print">${ico('printer',15)} ${L('Cetak / simpan PDF','Print / save PDF')}</button><button class="btn ghost sm" id="tr-png">${ico('download',15)} ${L('Unduh pola (PNG)','Download pattern (PNG)')}</button></div>
       </div></div>`, {wide:true});
-  const r=m.root;
+  const r=m.root, note0=$('#tr-note',r).innerHTML;
   const cur=()=> T.kind==='line' ? T.line : T.src;
   const preview=()=>{ const src=cur();
     $('#tr-prev',r).innerHTML = src ? `<img src="${esc(src)}" alt="" style="aspect-ratio:${ar};object-fit:contain;background:#fff">` : `<div class="hint" style="padding:40px;text-align:center">${L('Tekan “Buat garis pola”.','Press “Make line pattern”.')}</div>`;
     const E=area(T), g=sheetGrid(E);
-    $('#tr-sum',r).innerHTML=`${ico('ruler',20)}<div><b>${g.cols*g.rows} ${L('lembar','sheets')} ${T.paper} (${g.cols} × ${g.rows})</b><p>${T.area==='satu'?L('Satu motif','One repeat'):L('Kain','Cloth')} ${E.w} × ${E.h} cm${full?'':` · ${L('motif diulang tiap','repeats every')} ${T.rep} cm`} · ${L('tumpukan','overlap')} ${OVERLAP} cm. ${L('Cetak dengan skala 100% (“Ukuran sebenarnya”).','Print at 100% scale (“Actual size”).')}</p></div>`;
+    const iw=src && T.px[src], ppc=iw ? iw/(T.full ? T.w : T.rep) : 0;   // a full piece spans the cloth width; a tile spans one repeat
+    const sharpTxt = iw ? `<p class="${ppc<16?'tr-warn':''}">${L('Ketajaman sumber','Source sharpness')}: <b>${ppc.toFixed(0)} px/cm</b> (${iw} px) · ${L('dicetak','printed at')} ${PPC.toFixed(0)} px/cm${T.kind==='line'&&T.sharp?' · '+L('garis dipertajam','lines sharpened'):''}.${ppc<16?' '+(T.kind==='line'?L('Garis bisa pecah: buat ulang di 4K, atau cetak 1 motif saja.','Lines may look blocky: remake at 4K, or print just one repeat.'):L('Gambar bisa pecah: cetak 1 motif saja atau kain lebih kecil.','The image may look blocky: print one repeat or a smaller cloth.')):''}</p>` : '';
+    if(src && !T.px[src]) loadImg(src).then(im=>{ T.px[src]=im.width; preview(); }).catch(()=>{});
+    $('#tr-sum',r).innerHTML=`${ico('ruler',20)}<div><b>${g.cols*g.rows} ${L('lembar','sheets')} ${T.paper} (${g.cols} × ${g.rows})</b><p>${T.area==='satu'?L('Satu motif','One repeat'):L('Kain','Cloth')} ${E.w} × ${E.h} cm${full?'':` · ${L('motif diulang tiap','repeats every')} ${T.rep} cm`} · ${L('tumpukan','overlap')} ${OVERLAP} cm. ${L('Cetak dengan skala 100% (“Ukuran sebenarnya”).','Print at 100% scale (“Actual size”).')}</p>${sharpTxt}</div>`;
     $('#tr-print',r).disabled=$('#tr-png',r).disabled=!src||T.busy;
-    $('#tr-make',r).style.display=T.kind==='line'?'':'none'; $('#tr-note',r).style.display=T.kind==='line'?'':'none';
+    $('#tr-make',r).style.display=T.kind==='line'?'':'none'; $('#tr-note',r).style.display=T.kind==='line'?'':'none'; $('#tr-opts',r).style.display=T.kind==='line'?'':'none';
+    if(!T.busy) $('#tr-make',r).innerHTML=ico('wand',15)+' '+(T.line?L(`Buat ulang garis pola (${T.res})`,`Remake line pattern (${T.res})`):L(`Buat garis pola (${T.res})`,`Make line pattern (${T.res})`));
+    // line art made earlier (here or by "Sketch over") is reused for free; remaking it is optional
+    $('#tr-make',r).className = 'btn block sm ' + (T.line ? 'ghost' : 'soga');
+    const lw=T.line && T.px[T.line];
+    $('#tr-note',r).innerHTML = T.line
+      ? L(`${ico('check',13)} Garis pola sudah ada${lw?` (${lw} px)`:''}, dipakai bersama Sketsa ulang, jadi tidak perlu dibuat lagi. Buat ulang hanya kalau ketajamannya kurang.`,`${ico('check',13)} Line art already exists${lw?` (${lw} px)`:''}, shared with Sketch over, so there is no need to make it again. Remake it only if it isn’t sharp enough.`)
+      : note0;
   };
   designSource(d).then(s=>{ T.src=s; preview(); });
   preview();
   $$('#tr-kind button',r).forEach(b=>b.addEventListener('click',()=>{ T.kind=b.dataset.v; $$('#tr-kind button',r).forEach(x=>x.classList.toggle('on',x===b)); preview(); }));
   $$('#tr-area button',r).forEach(b=>b.addEventListener('click',()=>{ T.area=b.dataset.v; $$('#tr-area button',r).forEach(x=>x.classList.toggle('on',x===b)); preview(); }));
+  $$('#tr-res button',r).forEach(b=>b.addEventListener('click',()=>{ T.res=b.dataset.v; $$('#tr-res button',r).forEach(x=>x.classList.toggle('on',x===b)); preview(); }));
+  $('#tr-sharp',r).addEventListener('change',e=>{ T.sharp=e.target.checked; preview(); });
   $$('#tr-paper button',r).forEach(b=>b.addEventListener('click',()=>{ T.paper=b.dataset.v; $$('#tr-paper button',r).forEach(x=>x.classList.toggle('on',x===b)); preview(); }));
   const num=(id,f)=>$(id,r)?.addEventListener('input',e=>{ const v=+e.target.value; if(v>0){ f(v); if(full){ T.h=Math.round(T.w/ar); $('#tr-h',r).value=T.h; } preview(); } });
   num('#tr-w',v=>T.w=Math.min(600,v)); if(!full) num('#tr-h',v=>T.h=Math.min(600,v)); num('#tr-rep',v=>T.rep=v);
   $('#tr-make',r).addEventListener('click',async()=>{
     const b=$('#tr-make',r); T.busy=true; b.disabled=true; b.innerHTML=ico('clock',15)+' '+L('Membuat garis…','Making lines…'); preview();
     try{ const src=T.src||await designSource(d);
-      const res=await api('/api/lineart',{image_data:await shrinkDataURL(src,1536,.92), model:state.aiModel});
-      T.line=res.data; d.lineart=res.data; logGen(res.ms,true);
-      if(d.id){ const sd=state.designs.find(x=>x.id===d.id); if(sd){ sd.lineart=res.data; idbPut('designs',structuredClone(sd)); } }
+      const res=await api('/api/lineart',{image_data:await shrinkDataURL(src,1536,.92), model:state.aiModel, size:T.res});
+      T.line=res.data; storeLine(d, res.data); logGen(res.ms,true);
       toast(L(`Garis pola siap (${(res.ms/1000).toFixed(1)} dtk)`,`Line pattern ready (${(res.ms/1000).toFixed(1)} s)`));
     }catch(e){ toast(e.message,true); logGen(0,false); }
-    finally{ T.busy=false; b.disabled=false; b.innerHTML=ico('wand',15)+' '+L('Buat ulang garis pola','Remake line pattern'); preview(); }
+    finally{ T.busy=false; b.disabled=false; preview(); }
   });
-  $('#tr-png',r).addEventListener('click',()=>{ const a=document.createElement('a'); a.href=cur(); a.download=`${dn(d)}-pola.png`; a.click(); });
-  $('#tr-print',r).addEventListener('click',()=>printPattern(d,area(T),cur()));
+  $('#tr-png',r).addEventListener('click',async()=>{
+    const a=document.createElement('a'); a.download=`${dn(d)}-pola.png`;
+    a.href = T.kind==='line' && T.sharp ? await sharpLinePNG(cur()) : cur(); a.click(); });
+  $('#tr-print',r).addEventListener('click',()=>printPattern(d,area(T),cur(),{sharp:T.kind==='line'&&T.sharp}));
 }
-async function printPattern(d, T, src){
+async function printPattern(d, T, src, {sharp=false}={}){
   const g=sheetGrid(T), n=g.cols*g.rows;
   if(n>150){ toast(L('Terlalu banyak lembar (maks 150). Perkecil ukuran kain, pakai A3, atau cetak 1 motif.','Too many sheets (max 150). Use a smaller cloth, A3, or print one repeat.'),true); return; }
   toast(L(`Menyiapkan ${n} lembar…`,`Preparing ${n} sheets…`));
@@ -463,6 +496,7 @@ async function printPattern(d, T, src){
     const x0=i*(g.pw-OVERLAP), y0=j*(g.ph-OVERLAP);
     const cv=document.createElement('canvas'); cv.width=Math.round(g.pw*PPC); cv.height=Math.round(g.ph*PPC);
     const c=cv.getContext('2d'); drawCloth(c,img,T,x0,y0,g.pw,g.ph,ar);
+    if(sharp) sharpenLines(c,cv.width,cv.height);
     // overlap strips (glue here) and the cloth edge
     c.strokeStyle='#1C8BD6'; c.setLineDash([12,10]); c.lineWidth=2;
     if(i<g.cols-1){ const x=(g.pw-OVERLAP)*PPC; c.beginPath(); c.moveTo(x,0); c.lineTo(x,cv.height); c.stroke(); }

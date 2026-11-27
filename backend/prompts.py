@@ -336,3 +336,14 @@ def buddy_system(lang: str, shop: str, page: str = "", design: str = "", motif: 
          if auto_edit else
          "Auto-edit is off: an [[EDIT: ...]] line only shows the user an 'Apply' button; nothing changes until they press it."),
     ])
+
+
+def upscale_prompt(kind: str = "design") -> str:
+    """Redraw an image at a higher resolution without changing it (the paid 'Upscale' button)."""
+    what = ("black line art on white (a batik tracing pattern)" if kind == "lineart" else "batik textile design")
+    return (
+        f"Upscale the {what} labelled 'original image' to a higher resolution. Output the SAME image: identical "
+        "composition, every motif, line and isen-isen dot in exactly the same position, same colours and same proportions. "
+        "Only make it sharper and cleaner: crisp wax-resist outlines, clean edges, fine details resolved, no blur, no JPEG "
+        "artefacts. Do NOT add, remove, move or restyle anything, no new elements, no text, no watermark, no mockup."
+    )

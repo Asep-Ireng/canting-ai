@@ -362,6 +362,7 @@ async def chat(body: ChatIn, x_gemini_key: str | None = Header(default=None)):
 class LineArtIn(BaseModel):
     image_data: str
     model: str | None = None
+    size: str | None = None             # 1K | 2K | 4K (clamped to the model); default follows the design
 
 
 @app.post("/api/lineart")
@@ -371,7 +372,7 @@ async def lineart(body: LineArtIn, x_gemini_key: str | None = Header(default=Non
     if ai.is_mock(x_gemini_key):
         png = await asyncio.to_thread(mock_lineart, original)
     else:
-        size = "2K" if nearest_size(original) != "1K" else "1K"
+        size = body.size if body.size in SIZE_PX else ("2K" if nearest_size(original) != "1K" else "1K")
         try:
             png = await ai.image(prompts.LINEART_PROMPT, [("original design", original)], aspect=nearest_aspect(original),
                                  model=body.model, size=size, api_key=x_gemini_key)
@@ -379,6 +380,42 @@ async def lineart(body: LineArtIn, x_gemini_key: str | None = Header(default=Non
             raise HTTPException(502, str(e))
     ms = int((time.perf_counter() - t0) * 1000)
     return image_out(png, ms=ms, mock=ai.is_mock(x_gemini_key))
+
+
+# ---------------------------------------------------------------- upscale (paid button in the Editor)
+class UpscaleIn(BaseModel):
+    image_data: str
+    size: str = "4K"                    # 2K | 4K, clamped to what the model accepts
+    model: str | None = None
+    kind: str = "design"                # design | lineart
+
+
+def mock_upscale(data: bytes, long_px: int) -> bytes:
+    """Free local resize for mock mode (Lanczos); no new detail, just bigger."""
+    img = Image.open(io.BytesIO(data)).convert("RGB")
+    k = long_px / max(img.size)
+    if k > 1:
+        img = img.resize((round(img.width * k), round(img.height * k)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+@app.post("/api/upscale")
+async def upscale(body: UpscaleIn, x_gemini_key: str | None = Header(default=None)):
+    original = decode_data_url(body.image_data)
+    size = body.size if body.size in SIZE_PX else "4K"
+    t0 = time.perf_counter()
+    if ai.is_mock(x_gemini_key):
+        png = await asyncio.to_thread(mock_upscale, original, SIZE_PX[size])
+    else:
+        try:
+            png = await ai.image(prompts.upscale_prompt(body.kind), [("original image", original)],
+                                 aspect=nearest_aspect(original), model=body.model, size=size, api_key=x_gemini_key)
+        except AIError as e:
+            raise HTTPException(502, str(e))
+    ms = int((time.perf_counter() - t0) * 1000)
+    return image_out(png, ms=ms, mock=ai.is_mock(x_gemini_key), model=model_used(body.model))
 
 
 # ---------------------------------------------------------------- Tanya Canting (design discussion friend)

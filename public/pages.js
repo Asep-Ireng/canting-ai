@@ -326,7 +326,7 @@ pages.studio = {
     drop.addEventListener('drop',e=>{ e.preventDefault(); addFiles([...e.dataTransfer.files]); });
     $$('[data-rmref]').forEach(b=>b.addEventListener('click',()=>{ keep(); s.refs.splice(+b.dataset.rmref,1); go(); }));
     $('#rmsketch')?.addEventListener('click',()=>{ keep(); s.sketch=null; s.sketchStrokes=null; s.sketchBase=null; s.sketchId=null; s.sketchName=''; go(); });
-    $('#sketch').addEventListener('click',async()=>{ keep(); const r=await sketchModal(s.sketchStrokes,{base:s.sketchBase, baseAlpha:s.sketchAlpha, id:s.sketchId, name:s.sketchName}); if(r){ s.sketch=r.dataURL; s.sketchStrokes=r.strokes; s.sketchAlpha=r.baseAlpha; s.sketchId=r.id; s.sketchName=r.name; go(); } });
+    $('#sketch').addEventListener('click',async()=>{ keep(); const r=await sketchModal(s.sketchStrokes,{base:s.sketchBase, baseAlpha:s.sketchAlpha, id:s.sketchId, name:s.sketchName, w:s.sketchW||768}); if(r){ s.sketch=r.dataURL; s.sketchStrokes=r.strokes; s.sketchAlpha=r.baseAlpha; s.sketchId=r.id; s.sketchName=r.name; s.sketchW=r.w; go(); } });
     bindModelSelect(); bindSizePicker();
     $('#gen').addEventListener('click',()=>{ keep(); runGenerate(); });
     renderResults();
@@ -400,20 +400,19 @@ function renderSlot(i, fresh){
 /* "Sketch over": a design's line art becomes a wireframe in the sketch pad; the result goes to the Studio as the sketch */
 async function sketchFromDesign(d, btn){
   if(btn && btn.disabled) return;
-  let line=d.lineart;
+  let line=lineFor(d);   // reuse the tracing pattern's line art when it matches this version
   if(!line){
     const old=btn?btn.innerHTML:''; if(btn){ btn.disabled=true; btn.innerHTML=ico('clock',14)+' '+L('Membuat kerangka…','Making outlines…'); }
     try{
       const r=await api('/api/lineart',{image_data:await shrinkDataURL(await designSource(d),1536,.92), model:state.aiModel});
-      line=r.data; d.lineart=line; logGen(r.ms,true);
-      const sd=d.id && state.designs.find(x=>x.id===d.id); if(sd){ sd.lineart=line; idbPut('designs',structuredClone(sd)); }
+      line=r.data; storeLine(d, line); logGen(r.ms,true);
     }catch(e){ toast(e.message,true); logGen(0,false); return; }
     finally{ if(btn){ btn.disabled=false; btn.innerHTML=old; } }
   }
   const r=await sketchModal(null,{base:line, from:dn(d)});
   if(!r){ if(route==='gallery') go(); return; }   // a sketch may have been saved before closing
   state.studio.format=d.format||'tile';
-  useSketchInStudio({image:r.dataURL, strokes:r.strokes, base:line, baseAlpha:r.baseAlpha, id:r.id, name:r.name});
+  useSketchInStudio({image:r.dataURL, strokes:r.strokes, base:line, baseAlpha:r.baseAlpha, id:r.id, name:r.name, w:r.w});
 }
 
 /* ---------- templates page ---------- */
@@ -468,6 +467,9 @@ pages.editor = {
     return `
     <div class="ph"><div><h1>${L('Editor Desain','Design Editor')}</h1><p>${L('Minta AI mengubah desain, tandai bagian tertentu dengan marker, atau atur warna dan skala.','Ask the AI to change the design, mark specific parts with a marker, or adjust colour and scale.')}</p></div><div class="sp"></div>
       <button class="btn ghost" id="png">${ico('download')} PNG</button>
+      ${Math.max(d.w||0,d.h||0)>=4000
+        ? `<button class="btn ghost" id="upscale" disabled title="${L('Desain ini sudah resolusi tertinggi (4K), tidak perlu diperbesar.','This design is already at the highest resolution (4K); no need to upscale.')}">${ico('check')} ${L('Sudah 4K','Already 4K')}</button>`
+        : `<button class="btn ghost" id="upscale" title="${L('Perbesar resolusi desain dengan AI','Upscale the design with AI')}">${ico('sparkle')} ${L('Perbesar','Upscale')}${d.w&&d.h?` <small class="upx">${Math.max(d.w,d.h)} px</small>`:''}</button>`}
       <button class="btn ghost" id="astpl">${ico('layers')} ${L('Jadikan template','Make template')}</button>
       <button class="btn ghost" id="pola">${ico('ruler')} ${L('Pola nyorek','Tracing pattern')}</button>
       <button class="btn ghost" id="skov">${ico('brush')} ${L('Sketsa ulang','Sketch over')}</button>
@@ -550,6 +552,7 @@ pages.editor = {
     $('#pola').addEventListener('click',()=>tracingModal(d));
     $('#skov').addEventListener('click',e=>sketchFromDesign(d,e.currentTarget));
     $('#use-order')?.addEventListener('click',()=>useInOrder(d));
+    $('#upscale').addEventListener('click',()=>upscaleModal(d));
     $('#png').addEventListener('click',()=>exportPNG(batikSVG(d,{size:640,natural:true}),(dn(d)||'design')+'.png',1400,arOf(d)));
   }
 };
@@ -586,6 +589,40 @@ async function aiEdit(txt){
     toast(L(`AI selesai mengedit (${(r.ms/1000).toFixed(1)} dtk)`,`AI edit done (${(r.ms/1000).toFixed(1)} s)`));
     refreshStatus();
   }catch(e){ toast(e.message,true); }
+  finally{ ed.busy=false; if(route==='editor') go(); }
+}
+
+/* ---------- upscale (a paid Gemini call, so it is always an explicit choice) ---------- */
+function upscaleModal(d){
+  const long=Math.max(d.w||1024, d.h||1024), mock=aiMode()==='mock';
+  const sizes=(imageModels().find(m=>m.id===state.aiModel)?.sizes)||['1K'];
+  const opts=['2K','4K'].map(s=>({s, px:{'2K':2048,'4K':4096}[s], ok:sizes.includes(s) && {'2K':2048,'4K':4096}[s]>long}));
+  let pick=(opts.filter(o=>o.ok).at(-1)||{}).s;
+  const m=openModal(L('Perbesar resolusi','Upscale'), `
+    <p class="hint" style="margin-bottom:12px">${L(`Ukuran sekarang: <b>${d.w||'?'} × ${d.h||'?'} px</b>. Gemini menggambar ulang desain ini di resolusi lebih tinggi supaya garis dan isen lebih tajam, misalnya untuk cetak kain atau foto katalog.`,`Current size: <b>${d.w||'?'} × ${d.h||'?'} px</b>. Gemini redraws this design at a higher resolution so lines and isen are sharper, e.g. for printing cloth or catalogue photos.`)}</p>
+    <div class="seg" id="up-size" style="max-width:260px">${opts.map(o=>`<button data-v="${o.s}" class="${o.s===pick?'on':''}" ${o.ok?'':'disabled'}>${o.s} · ${o.px}px</button>`).join('')}</div>
+    ${pick?'':`<p class="hint" style="margin-top:8px">${long>=4096?L('Desain ini sudah 4K.','This design is already 4K.'):L('Model ini tidak bisa membuat 2K/4K. Pilih Nano Banana 2 atau 2.1.','This model can’t make 2K/4K. Pick Nano Banana 2 or 2.1.')}</p>`}
+    <div class="note" style="margin-top:14px">${ico('info',20)}<div><b>${mock?L('Mode mock: gratis','Mock mode: free'):L('Berbayar: 1 panggilan gambar Gemini','Paid: 1 Gemini image call')}</b><p>${mock?L('Diperbesar secara lokal (tanpa AI), jadi tidak ada detail baru.','Resized locally (no AI), so no new detail is added.'):L('Resolusi lebih besar biasanya lebih mahal, 4K paling mahal. Detail kecil bisa sedikit berubah; versi lama tetap ada di riwayat versi.','Bigger resolutions usually cost more, 4K the most. Small details may change slightly; the old version stays in the version history.')}</p></div></div>
+    <div class="row" style="margin-top:16px"><div class="sp"></div><button class="btn ghost" data-no>${L('Batal','Cancel')}</button><button class="btn primary" data-yes ${pick?'':'disabled'}>${ico('sparkle')} <span id="up-lbl">${L('Perbesar ke ','Upscale to ')}${pick||''}</span></button></div>`);
+  $$('#up-size button',m.root).forEach(b=>b.addEventListener('click',()=>{ pick=b.dataset.v; $$('#up-size button',m.root).forEach(x=>x.classList.toggle('on',x===b)); $('#up-lbl',m.root).textContent=L('Perbesar ke ','Upscale to ')+pick; }));
+  $('[data-no]',m.root).addEventListener('click',()=>m.close());
+  $('[data-yes]',m.root).addEventListener('click',()=>{ m.close(); aiUpscale(pick); });
+}
+async function aiUpscale(size){
+  const d=state.current; if(!d || ed.busy) return;
+  ed.busy=true;
+  const btn=$('#upscale'); if(btn){ btn.disabled=true; btn.innerHTML=ico('clock',15)+' '+L('Memperbesar…','Upscaling…'); }
+  $('#canvas')?.classList.add('busy');
+  try{
+    const src=await designSource(d);
+    if(!d.versions || !d.versions.length){ d.versions=[{image:src, w:d.w||1024, h:d.h||1024}]; d.vi=0; }
+    const r=await api('/api/upscale',{image_data:await shrinkDataURL(src,1536,.95), size, model:state.aiModel});
+    logGen(r.ms,true);
+    d.versions=(d.versions||[]).slice(0,(d.vi??0)+1).concat({image:r.data,w:r.w,h:r.h}); d.vi=d.versions.length-1;
+    d.image=r.data; d.w=r.w; d.h=r.h; d.adjust={...DEFAULT_ADJ}; d.mock=r.mock; d.model=r.model;
+    toast(L(`Diperbesar ke ${r.w} × ${r.h} px (${(r.ms/1000).toFixed(1)} dtk)`,`Upscaled to ${r.w} × ${r.h} px (${(r.ms/1000).toFixed(1)} s)`));
+    refreshStatus();
+  }catch(e){ toast(e.message,true); logGen(0,false); }
   finally{ ed.busy=false; if(route==='editor') go(); }
 }
 
@@ -770,8 +807,8 @@ pages.gallery = {
     $$('[data-gtab]').forEach(b=>b.addEventListener('click',()=>{ pages.gallery.tab=b.dataset.gtab; go(); }));
     const skById=id=>state.sketches.find(x=>x.id===id);
     const editSketch=async sk=>{
-      const r=await sketchModal(sk?sk.strokes:null, sk?{base:sk.base, baseAlpha:sk.baseAlpha, id:sk.id, name:sk.name, from:sk.from}:{});
-      if(r) useSketchInStudio({image:r.dataURL, strokes:r.strokes, base:sk?sk.base:null, baseAlpha:r.baseAlpha, id:r.id, name:r.name});
+      const r=await sketchModal(sk?sk.strokes:null, sk?{base:sk.base, baseAlpha:sk.baseAlpha, id:sk.id, name:sk.name, from:sk.from, w:sk.w||768}:{});
+      if(r) useSketchInStudio({image:r.dataURL, strokes:r.strokes, base:sk?sk.base:null, baseAlpha:r.baseAlpha, id:r.id, name:r.name, w:r.w});
       else go();   // refresh: it may have been saved
     };
     $('#sk-new')?.addEventListener('click',()=>editSketch(null));

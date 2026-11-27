@@ -273,7 +273,7 @@ const UMKM = 'Batik Laras Ayu';
 const state = {
   designs: [], sketches: [], templates: [], orders: [], status: {mock:true, images:0, avg_ms:0},
   current: null,
-  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, creativity:50, grounding:false, refs:[], sketch:null, sketchStrokes:null, sketchBase:null, sketchAlpha:1, sketchId:null, sketchName:'', status:'idle', results:[], used:''},
+  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, creativity:50, grounding:false, refs:[], sketch:null, sketchStrokes:null, sketchBase:null, sketchAlpha:1, sketchId:null, sketchName:'', sketchW:0, status:'idle', results:[], used:''},
   wm: {text:UMKM, pos:'br', opacity:.6, size:1, color:'#ffffff', invisible:true, owner:UMKM},
   mock: {bg:'#F3E9D2', scale:1}
 };
@@ -357,6 +357,15 @@ async function deleteDesign(id){
 }
 function openEditor(d){ state.current = structuredClone(d); nav('editor'); }
 
+/* ---------- line art: shared by the tracing pattern and "Sketch over", valid only for the image it was made from ---------- */
+const imgKey = s => s ? s.length+':'+s.slice(-48) : 'svg';
+const lineFor = d => d && d.lineart && (d.lineartKey===undefined || d.lineartKey===imgKey(d.image)) ? d.lineart : null;  // no key = made before keys existed
+function storeLine(d, line){
+  d.lineart=line; d.lineartKey=imgKey(d.image);
+  const sd=d.id && state.designs.find(x=>x.id===d.id);
+  if(sd && sd.image===d.image){ sd.lineart=line; sd.lineartKey=d.lineartKey; idbPut('designs',structuredClone(sd)); }
+}
+
 /* ---------- sketches (Collection → Sketches tab) ---------- */
 async function saveSketch(sk){
   const copy = structuredClone(sk); copy.id = copy.id || newId('skt'); copy.date = copy.date || today(); copy.updated = Date.now();
@@ -372,7 +381,8 @@ async function deleteSketch(id){
 }
 /* put a sketch into the Studio as its sketch input */
 function useSketchInStudio(sk){
-  Object.assign(state.studio,{sketch:sk.image, sketchStrokes:sk.strokes||null, sketchBase:sk.base||null, sketchAlpha:sk.baseAlpha??1, sketchId:sk.id||null, sketchName:sk.name||''});
+  if(sk.w && sk.h){ const r=sk.w/sk.h; state.studio.format = r>2.1 ? 'pinggiran' : r>1.3 ? 'kain' : r<0.75 ? 'selendang' : 'tile'; }  // match the sketch's shape
+  Object.assign(state.studio,{sketchW:sk.w||768, sketch:sk.image, sketchStrokes:sk.strokes||null, sketchBase:sk.base||null, sketchAlpha:sk.baseAlpha??1, sketchId:sk.id||null, sketchName:sk.name||''});
   nav('studio');
   toast(L('Sketsa siap di Studio. Tulis perubahan yang kamu mau, lalu Generate.','Sketch is ready in the Studio. Describe what you want, then press Generate.'));
 }
@@ -490,7 +500,7 @@ class DrawPad{
   }
   redraw(){
     const c=this.ctx; c.globalCompositeOperation='source-over'; c.clearRect(0,0,this.cv.width,this.cv.height);
-    if(this.base){ c.globalAlpha=this.baseAlpha; c.drawImage(this.base,0,0,this.cv.width,this.cv.height); c.globalAlpha=1; }
+    if(this.base){ c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high'; c.globalAlpha=this.baseAlpha; c.drawImage(this.base,0,0,this.cv.width,this.cv.height); c.globalAlpha=1; }
     this.strokes.forEach(s=>this.drawStroke(s)); c.globalCompositeOperation='source-over';
   }
   undo(){ this.strokes.pop(); this.redraw(); this.onchange(); }
@@ -524,7 +534,10 @@ function bindPadTools(root, pad){
    opts.id / opts.name: the saved sketch being edited (Save updates it); opts.from: name of the source design. */
 async function sketchModal(prevStrokes, opts={}){
   const baseImg = opts.base ? await loadImg(opts.base).catch(()=>null) : null;
-  const H = baseImg ? Math.max(256, Math.min(1536, Math.round(768*baseImg.height/baseImg.width))) : 768;
+  // 1280 px wide so the outlines stay sharp on screen (strokes saved at another width are rescaled)
+  const W = 1280, H = baseImg ? Math.max(400, Math.min(2560, Math.round(W*baseImg.height/baseImg.width))) : W;
+  const sc = W / (opts.w || W);
+  if(prevStrokes && sc!==1) prevStrokes = prevStrokes.map(s=>({...s, w:s.w*sc, pts:s.pts.map(([x,y])=>[x*sc,y*sc])}));
   return new Promise(resolve=>{
     const m=openModal(baseImg?L('Sketsa ulang dari desain','Sketch over a design'):L('Gambar sketsa motif','Sketch your motif'), `
       <p class="hint" style="margin-bottom:10px">${baseImg
@@ -532,7 +545,7 @@ async function sketchModal(prevStrokes, opts={}){
         : L('Gambar bentuk kasarnya saja (bunga, awan, burung, susunan motif). AI akan menggambar ulang dalam gaya batik.','Just draw the rough shapes (a flower, cloud, bird, motif layout). The AI redraws it in batik style.')}</p>
       ${baseImg?`<div class="row" style="gap:10px;margin-bottom:10px;align-items:center"><span class="lbl" style="margin:0">${L('Kerangka','Outlines')}</span><div class="seg" id="sk-alpha" style="min-width:220px"><button data-v="1" class="${(opts.baseAlpha??1)>=1?'on':''}">${L('Tegas','Bold')}</button><button data-v=".35" class="${(opts.baseAlpha??1)<1?'on':''}">${L('Samar','Faded')}</button></div></div>`:''}
       ${padTools(['#2A1D14','#7A4426','#1C2D54','#B3262B','#2E6B4F'])}
-      <div class="pad-wrap"><canvas width="768" height="${H}"></canvas></div>
+      <div class="pad-wrap" style="aspect-ratio:${W}/${H}"><canvas width="${W}" height="${H}"></canvas></div>
       <div class="row wrap sk-foot" style="margin-top:14px"><input type="text" id="sk-name" maxlength="80" aria-label="${L('Nama sketsa','Sketch name')}" placeholder="${L('Nama sketsa','Sketch name')}" value="${esc(opts.name || (opts.from ? L('Sketsa dari ','Sketch from ')+opts.from : L('Sketsa ','Sketch ')+fmtDate(today())))}">
         <div class="sp"></div><button class="btn ghost" data-cancel>${L('Batal','Cancel')}</button><button class="btn ghost" data-save>${ico('save')} ${L('Simpan sketsa','Save sketch')}</button><button class="btn primary" data-ok>${ico('check')} ${L('Pakai sketsa','Use sketch')}</button></div>`);
     const pad=new DrawPad($('canvas',m.root));
@@ -557,7 +570,7 @@ async function sketchModal(prevStrokes, opts={}){
     });
     $('[data-ok]',m.root).addEventListener('click',()=>{
       if(pad.isEmpty()){ toast(L('Sketsanya masih kosong.','The sketch is empty.'), true); return; }
-      finish({dataURL:pad.toDataURL('#ffffff'), strokes:structuredClone(pad.strokes), baseAlpha:pad.baseAlpha, id:savedId, name:nameOf()});
+      finish({dataURL:pad.toDataURL('#ffffff'), strokes:structuredClone(pad.strokes), baseAlpha:pad.baseAlpha, id:savedId, name:nameOf(), w:pad.cv.width});
     });
     new MutationObserver((_,obs)=>{ if(!document.body.contains(m.root)){ obs.disconnect(); finish(null); } }).observe(document.body,{childList:true});
   });

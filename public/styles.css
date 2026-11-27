@@ -633,3 +633,11 @@ select.model-pick{padding:9px 12px;font-weight:600;font-size:13.5px;background:#
 .bud-auto{color:var(--ink)}
 .bud-auto.on{color:var(--soga)}
 .bud-auto i{font-style:normal;background:var(--soga);color:#fff;border-radius:99px;padding:0 7px;font-size:11px;font-weight:700}
+
+/* tracing pattern: resolution + sharpen */
+.tr-sharp{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);cursor:pointer}
+.tr-sharp input{accent-color:var(--soga)}
+#tr-sum .tr-warn{color:#B3262B}
+
+/* editor: upscale button shows the current size */
+#upscale .upx{font-size:11px;font-weight:600;color:var(--muted);background:#EEDFC2;border-radius:99px;padding:1px 7px}
