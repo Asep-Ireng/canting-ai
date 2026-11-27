@@ -243,8 +243,8 @@ async function api(path, body, method, key=getKey()){
 let _idb;
 function idb(){
   return _idb ||= new Promise((res, rej)=>{
-    const r = indexedDB.open('canting-ai', 2);
-    r.onupgradeneeded = () => { for(const st of ['designs','templates','orders']) if(!r.result.objectStoreNames.contains(st)) r.result.createObjectStore(st, {keyPath:'id'}); };
+    const r = indexedDB.open('canting-ai', 3);
+    r.onupgradeneeded = () => { for(const st of ['designs','templates','orders','sketches']) if(!r.result.objectStoreNames.contains(st)) r.result.createObjectStore(st, {keyPath:'id'}); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
@@ -271,9 +271,9 @@ const aiMode = () => getKey() ? 'own' : (state.status.server_key ? 'server' : 'm
 /* ---------- state ---------- */
 const UMKM = 'Batik Laras Ayu';
 const state = {
-  designs: [], templates: [], orders: [], status: {mock:true, images:0, avg_ms:0},
+  designs: [], sketches: [], templates: [], orders: [], status: {mock:true, images:0, avg_ms:0},
   current: null,
-  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, creativity:50, grounding:false, refs:[], sketch:null, sketchStrokes:null, status:'idle', results:[], used:''},
+  studio: {mode:'template', template_id:'kawung', format:'tile', prompt:'', pal:'auto', dye:'bebas', density:'medium', count:4, creativity:50, grounding:false, refs:[], sketch:null, sketchStrokes:null, sketchBase:null, sketchAlpha:1, sketchId:null, sketchName:'', status:'idle', results:[], used:''},
   wm: {text:UMKM, pos:'br', opacity:.6, size:1, color:'#ffffff', invisible:true, owner:UMKM},
   mock: {bg:'#F3E9D2', scale:1}
 };
@@ -316,13 +316,14 @@ function bindModelSelect(root=document){
   }));
 }
 async function loadAll(){
-  const [st, tp, mine, ds, od] = await Promise.allSettled([api('/api/status'), api('/api/templates'), idbAll('templates'), idbAll('designs'), idbAll('orders')]);
+  const [st, tp, mine, ds, od, sk] = await Promise.allSettled([api('/api/status'), api('/api/templates'), idbAll('templates'), idbAll('designs'), idbAll('orders'), idbAll('sketches')]);
   if(st.status==='fulfilled') state.status={...st.value, ...localStats()};
   const builtin = tp.status==='fulfilled' ? tp.value : [];
   const own = mine.status==='fulfilled' ? mine.value.sort((a,b)=>(a.created||0)-(b.created||0)) : [];
   state.templates = [...builtin, ...own];
   if(ds.status==='fulfilled') state.designs = ds.value.sort((a,b)=>(b.updated||0)-(a.updated||0));
   if(od.status==='fulfilled') state.orders = od.value.sort((a,b)=>(b.updated||0)-(a.updated||0));
+  if(sk.status==='fulfilled') state.sketches = sk.value.sort((a,b)=>(b.updated||0)-(a.updated||0));
   if(st.status==='rejected') toast(st.reason.message, true);
   initModel();
   state.current = state.designs[0] ? structuredClone(state.designs[0]) : sampleDesign();
@@ -355,6 +356,26 @@ async function deleteDesign(id){
   state.designs = state.designs.filter(x=>x.id!==id);
 }
 function openEditor(d){ state.current = structuredClone(d); nav('editor'); }
+
+/* ---------- sketches (Collection → Sketches tab) ---------- */
+async function saveSketch(sk){
+  const copy = structuredClone(sk); copy.id = copy.id || newId('skt'); copy.date = copy.date || today(); copy.updated = Date.now();
+  await idbPut('sketches', copy);
+  const i = state.sketches.findIndex(x=>x.id===copy.id);
+  if(i>=0) state.sketches.splice(i,1);
+  state.sketches.unshift(copy);
+  return copy;
+}
+async function deleteSketch(id){
+  await idbDel('sketches', id);
+  state.sketches = state.sketches.filter(x=>x.id!==id);
+}
+/* put a sketch into the Studio as its sketch input */
+function useSketchInStudio(sk){
+  Object.assign(state.studio,{sketch:sk.image, sketchStrokes:sk.strokes||null, sketchBase:sk.base||null, sketchAlpha:sk.baseAlpha??1, sketchId:sk.id||null, sketchName:sk.name||''});
+  nav('studio');
+  toast(L('Sketsa siap di Studio. Tulis perubahan yang kamu mau, lalu Generate.','Sketch is ready in the Studio. Describe what you want, then press Generate.'));
+}
 
 /* ---------- image helpers ---------- */
 const dataCache = {};
@@ -444,7 +465,7 @@ function confirmModal(message, okLabel){
 /* ---------- drawing pad (sketches + marker annotations) ---------- */
 class DrawPad{
   constructor(canvas, {color='#2A1D14', size=10, onchange=()=>{}}={}){
-    Object.assign(this,{cv:canvas, ctx:canvas.getContext('2d'), strokes:[], cur:null, color, size, tool:'pen', onchange});
+    Object.assign(this,{cv:canvas, ctx:canvas.getContext('2d'), strokes:[], cur:null, color, size, tool:'pen', onchange, base:null, baseAlpha:1});
     canvas.addEventListener('pointerdown',e=>this.down(e));
     canvas.addEventListener('pointermove',e=>this.move(e));
     ['pointerup','pointercancel','pointerleave'].forEach(t=>canvas.addEventListener(t,()=>this.up()));
@@ -467,10 +488,14 @@ class DrawPad{
     for(let i=Math.max(1,from+1);i<p.length;i++) c.lineTo(...p[i]);
     c.stroke();
   }
-  redraw(){ this.ctx.clearRect(0,0,this.cv.width,this.cv.height); this.strokes.forEach(s=>this.drawStroke(s)); this.ctx.globalCompositeOperation='source-over'; }
+  redraw(){
+    const c=this.ctx; c.globalCompositeOperation='source-over'; c.clearRect(0,0,this.cv.width,this.cv.height);
+    if(this.base){ c.globalAlpha=this.baseAlpha; c.drawImage(this.base,0,0,this.cv.width,this.cv.height); c.globalAlpha=1; }
+    this.strokes.forEach(s=>this.drawStroke(s)); c.globalCompositeOperation='source-over';
+  }
   undo(){ this.strokes.pop(); this.redraw(); this.onchange(); }
   clear(){ this.strokes=[]; this.redraw(); this.onchange(); }
-  isEmpty(){ return !this.strokes.some(s=>s.tool!=='eraser'); }
+  isEmpty(){ return !this.base && !this.strokes.some(s=>s.tool!=='eraser'); }
   toDataURL(bg){
     if(!bg) return this.cv.toDataURL('image/png');
     const o=document.createElement('canvas'); o.width=this.cv.width; o.height=this.cv.height;
@@ -494,23 +519,45 @@ function bindPadTools(root, pad){
   $('[data-undo]',root).addEventListener('click',()=>pad.undo());
   $('[data-clear]',root).addEventListener('click',()=>pad.clear());
 }
-/* Sketch modal: resolves with {dataURL, strokes} or null if cancelled. */
-function sketchModal(prevStrokes){
+/* Sketch modal: resolves with {dataURL, strokes, baseAlpha, id, name} or null if cancelled.
+   opts.base: a line-art data URL drawn underneath as a wireframe to draw over (from "Sketch over" on a design).
+   opts.id / opts.name: the saved sketch being edited (Save updates it); opts.from: name of the source design. */
+async function sketchModal(prevStrokes, opts={}){
+  const baseImg = opts.base ? await loadImg(opts.base).catch(()=>null) : null;
+  const H = baseImg ? Math.max(256, Math.min(1536, Math.round(768*baseImg.height/baseImg.width))) : 768;
   return new Promise(resolve=>{
-    const m=openModal(L('Gambar sketsa motif','Sketch your motif'), `
-      <p class="hint" style="margin-bottom:10px">${L('Gambar bentuk kasarnya saja (bunga, awan, burung, susunan motif). AI akan menggambar ulang dalam gaya batik.','Just draw the rough shapes (a flower, cloud, bird, motif layout). The AI redraws it in batik style.')}</p>
+    const m=openModal(baseImg?L('Sketsa ulang dari desain','Sketch over a design'):L('Gambar sketsa motif','Sketch your motif'), `
+      <p class="hint" style="margin-bottom:10px">${baseImg
+        ? L('Ini kerangka garis dari desainmu. Gambar di atasnya, hapus bagian yang tidak dipakai dengan penghapus, lalu pakai sebagai sketsa baru. AI menggambar ulang dalam gaya batik.','These are the outlines of your design. Draw over them, erase the parts you don’t want, then use it as a new sketch. The AI redraws it in batik style.')
+        : L('Gambar bentuk kasarnya saja (bunga, awan, burung, susunan motif). AI akan menggambar ulang dalam gaya batik.','Just draw the rough shapes (a flower, cloud, bird, motif layout). The AI redraws it in batik style.')}</p>
+      ${baseImg?`<div class="row" style="gap:10px;margin-bottom:10px;align-items:center"><span class="lbl" style="margin:0">${L('Kerangka','Outlines')}</span><div class="seg" id="sk-alpha" style="min-width:220px"><button data-v="1" class="${(opts.baseAlpha??1)>=1?'on':''}">${L('Tegas','Bold')}</button><button data-v=".35" class="${(opts.baseAlpha??1)<1?'on':''}">${L('Samar','Faded')}</button></div></div>`:''}
       ${padTools(['#2A1D14','#7A4426','#1C2D54','#B3262B','#2E6B4F'])}
-      <div class="pad-wrap"><canvas width="768" height="768"></canvas></div>
-      <div class="row" style="margin-top:14px"><div class="sp"></div><button class="btn ghost" data-cancel>${L('Batal','Cancel')}</button><button class="btn primary" data-ok>${ico('check')} ${L('Pakai sketsa','Use sketch')}</button></div>`);
+      <div class="pad-wrap"><canvas width="768" height="${H}"></canvas></div>
+      <div class="row wrap sk-foot" style="margin-top:14px"><input type="text" id="sk-name" maxlength="80" aria-label="${L('Nama sketsa','Sketch name')}" placeholder="${L('Nama sketsa','Sketch name')}" value="${esc(opts.name || (opts.from ? L('Sketsa dari ','Sketch from ')+opts.from : L('Sketsa ','Sketch ')+fmtDate(today())))}">
+        <div class="sp"></div><button class="btn ghost" data-cancel>${L('Batal','Cancel')}</button><button class="btn ghost" data-save>${ico('save')} ${L('Simpan sketsa','Save sketch')}</button><button class="btn primary" data-ok>${ico('check')} ${L('Pakai sketsa','Use sketch')}</button></div>`);
     const pad=new DrawPad($('canvas',m.root));
-    if(prevStrokes){ pad.strokes=structuredClone(prevStrokes); pad.redraw(); }
+    if(baseImg){ pad.base=baseImg; pad.baseAlpha=opts.baseAlpha??1; }
+    if(prevStrokes) pad.strokes=structuredClone(prevStrokes);
+    pad.redraw();
     bindPadTools(m.root,pad);
+    $$('#sk-alpha button',m.root).forEach(b=>b.addEventListener('click',()=>{ pad.baseAlpha=+b.dataset.v; $$('#sk-alpha button',m.root).forEach(x=>x.classList.toggle('on',x===b)); pad.redraw(); }));
     let done=false;
     const finish=v=>{ if(done) return; done=true; m.close(); resolve(v); };
+    let savedId = opts.id || null;
+    const nameOf = () => ($('#sk-name',m.root).value.trim() || L('Sketsa tanpa nama','Untitled sketch'));
     $('[data-cancel]',m.root).addEventListener('click',()=>finish(null));
+    $('[data-save]',m.root).addEventListener('click',async()=>{
+      if(pad.isEmpty()){ toast(L('Sketsanya masih kosong.','The sketch is empty.'), true); return; }
+      try{
+        const sk=await saveSketch({id:savedId, name:nameOf(), image:pad.toDataURL('#ffffff'), strokes:structuredClone(pad.strokes),
+          base:opts.base||null, baseAlpha:pad.baseAlpha, w:pad.cv.width, h:pad.cv.height, from:opts.from||''});
+        savedId=sk.id;
+        toast(L('Sketsa tersimpan di Koleksi → Sketsa','Sketch saved to Collection → Sketches'));
+      }catch(e){ toast(e.message,true); }
+    });
     $('[data-ok]',m.root).addEventListener('click',()=>{
       if(pad.isEmpty()){ toast(L('Sketsanya masih kosong.','The sketch is empty.'), true); return; }
-      finish({dataURL:pad.toDataURL('#ffffff'), strokes:structuredClone(pad.strokes)});
+      finish({dataURL:pad.toDataURL('#ffffff'), strokes:structuredClone(pad.strokes), baseAlpha:pad.baseAlpha, id:savedId, name:nameOf()});
     });
     new MutationObserver((_,obs)=>{ if(!document.body.contains(m.root)){ obs.disconnect(); finish(null); } }).observe(document.body,{childList:true});
   });
@@ -688,7 +735,7 @@ const designCard = d => `<div class="card dcard" data-open="${esc(d.id)}">
   <b>${esc(dn(d))}</b><small>${esc(designLabel(d))} · ${esc(fmtDate(d.date))}</small></div>`;
 function bindOpen(root=document){
   $$('[data-open]',root).forEach(el=>el.addEventListener('click',e=>{
-    if(e.target.closest('[data-del]')) return;
+    if(e.target.closest('[data-del],.dact')) return;
     const d = state.designs.find(x=>x.id===el.dataset.open);
     if(d) openEditor(d);
   }));

@@ -325,8 +325,8 @@ pages.studio = {
     ['dragleave','drop'].forEach(t=>drop.addEventListener(t,()=>drop.classList.remove('over')));
     drop.addEventListener('drop',e=>{ e.preventDefault(); addFiles([...e.dataTransfer.files]); });
     $$('[data-rmref]').forEach(b=>b.addEventListener('click',()=>{ keep(); s.refs.splice(+b.dataset.rmref,1); go(); }));
-    $('#rmsketch')?.addEventListener('click',()=>{ keep(); s.sketch=null; s.sketchStrokes=null; go(); });
-    $('#sketch').addEventListener('click',async()=>{ keep(); const r=await sketchModal(s.sketchStrokes); if(r){ s.sketch=r.dataURL; s.sketchStrokes=r.strokes; go(); } });
+    $('#rmsketch')?.addEventListener('click',()=>{ keep(); s.sketch=null; s.sketchStrokes=null; s.sketchBase=null; s.sketchId=null; s.sketchName=''; go(); });
+    $('#sketch').addEventListener('click',async()=>{ keep(); const r=await sketchModal(s.sketchStrokes,{base:s.sketchBase, baseAlpha:s.sketchAlpha, id:s.sketchId, name:s.sketchName}); if(r){ s.sketch=r.dataURL; s.sketchStrokes=r.strokes; s.sketchAlpha=r.baseAlpha; s.sketchId=r.id; s.sketchName=r.name; go(); } });
     bindModelSelect(); bindSizePicker();
     $('#gen').addEventListener('click',()=>{ keep(); runGenerate(); });
     renderResults();
@@ -397,6 +397,25 @@ function renderSlot(i, fresh){
   }));
 }
 
+/* "Sketch over": a design's line art becomes a wireframe in the sketch pad; the result goes to the Studio as the sketch */
+async function sketchFromDesign(d, btn){
+  if(btn && btn.disabled) return;
+  let line=d.lineart;
+  if(!line){
+    const old=btn?btn.innerHTML:''; if(btn){ btn.disabled=true; btn.innerHTML=ico('clock',14)+' '+L('Membuat kerangka…','Making outlines…'); }
+    try{
+      const r=await api('/api/lineart',{image_data:await shrinkDataURL(await designSource(d),1536,.92), model:state.aiModel});
+      line=r.data; d.lineart=line; logGen(r.ms,true);
+      const sd=d.id && state.designs.find(x=>x.id===d.id); if(sd){ sd.lineart=line; idbPut('designs',structuredClone(sd)); }
+    }catch(e){ toast(e.message,true); logGen(0,false); return; }
+    finally{ if(btn){ btn.disabled=false; btn.innerHTML=old; } }
+  }
+  const r=await sketchModal(null,{base:line, from:dn(d)});
+  if(!r){ if(route==='gallery') go(); return; }   // a sketch may have been saved before closing
+  state.studio.format=d.format||'tile';
+  useSketchInStudio({image:r.dataURL, strokes:r.strokes, base:line, baseAlpha:r.baseAlpha, id:r.id, name:r.name});
+}
+
 /* ---------- templates page ---------- */
 pages.templates = {
   html(){
@@ -451,6 +470,7 @@ pages.editor = {
       <button class="btn ghost" id="png">${ico('download')} PNG</button>
       <button class="btn ghost" id="astpl">${ico('layers')} ${L('Jadikan template','Make template')}</button>
       <button class="btn ghost" id="pola">${ico('ruler')} ${L('Pola nyorek','Tracing pattern')}</button>
+      <button class="btn ghost" id="skov">${ico('brush')} ${L('Sketsa ulang','Sketch over')}</button>
       ${d.order_id && state.orders.some(o=>o.id===d.order_id) ? `<button class="btn soga" id="use-order">${ico('chat')} ${L('Pakai untuk pesanan','Use for the order')}</button>` : ''}
       <button class="btn ghost" id="save">${ico('save')} ${L('Simpan','Save')}</button>
       <a class="btn primary" href="#/watermark">${L('Lanjut ke Watermark','Continue to Watermark')} ${ico('arrow')}</a></div>
@@ -528,6 +548,7 @@ pages.editor = {
     $('#save').addEventListener('click',()=>saveDesign(d));
     $('#astpl').addEventListener('click',()=>saveAsTemplate(d));
     $('#pola').addEventListener('click',()=>tracingModal(d));
+    $('#skov').addEventListener('click',e=>sketchFromDesign(d,e.currentTarget));
     $('#use-order')?.addEventListener('click',()=>useInOrder(d));
     $('#png').addEventListener('click',()=>exportPNG(batikSVG(d,{size:640,natural:true}),(dn(d)||'design')+'.png',1400,arOf(d)));
   }
@@ -718,20 +739,52 @@ pages.mockup = {
 };
 
 /* ---------- gallery ---------- */
+const sketchCard = sk => `<div class="card dcard skcard" data-skedit="${esc(sk.id)}">
+  <div class="svgw"><div class="svgbox"><img src="${esc(sk.image)}" alt="${esc(sk.name)}" loading="lazy"></div>${sk.base?`<span class="badge">${ico('layers',12)} ${L('dari desain','from design')}</span>`:''}</div><button class="del" data-skdel="${esc(sk.id)}" aria-label="${L('Hapus','Delete')}">${ico('trash',16)}</button>
+  <b>${esc(sk.name)}</b><small>${sk.from?esc(sk.from)+' · ':''}${esc(fmtDate(sk.date))}</small>
+  <div class="dact"><button class="btn primary sm" data-skuse="${esc(sk.id)}">${ico('sparkle',14)} ${L('Pakai di Studio','Use in Studio')}</button><button class="btn ghost sm" data-skedit="${esc(sk.id)}">${ico('edit',14)} Edit</button></div></div>`;
 pages.gallery = {
-  filter:'all',
+  filter:'all', tab:'designs',
   html(){
     const f=this.filter, list=state.designs.filter(d=>f==='all'||(f==='prot'?d.protected:!d.protected));
+    const sk=this.tab==='sketches';
+    const tabs=`<div class="gtabs" role="tablist">
+      <button role="tab" data-gtab="designs" class="${sk?'':'on'}" aria-selected="${!sk}">${ico('grid',16)} ${L('Desain','Designs')} <span>${state.designs.length}</span></button>
+      <button role="tab" data-gtab="sketches" class="${sk?'on':''}" aria-selected="${sk}">${ico('brush',16)} ${L('Sketsa','Sketches')} <span>${state.sketches.length}</span></button></div>`;
+    if(sk) return `
+    <div class="ph"><div><h1>${L('Koleksi','Collection')}</h1><p>${L('Sketsa yang kamu simpan. Pakai lagi di Studio sebagai sketsa, atau lanjutkan menggambarnya.','Sketches you saved. Use one again in the Studio as the sketch, or keep drawing on it.')}</p></div><div class="sp"></div>
+      <button class="btn primary" id="sk-new">${ico('brush')} ${L('Sketsa baru','New sketch')}</button></div>
+    ${tabs}
+    ${state.sketches.length ? `<div class="gal stagger">${state.sketches.map(sketchCard).join('')}</div>`
+      : `<div class="empty-sm">${L('Belum ada sketsa. Tekan <b>Simpan sketsa</b> saat menggambar, atau pakai <b>Sketsa ulang</b> pada sebuah desain.','No sketches yet. Press <b>Save sketch</b> while drawing, or use <b>Sketch over</b> on a design.')}</div>`}`;
     return `
-    <div class="ph"><div><h1>${L('Koleksi','Collection')}</h1><p>${state.designs.length} ${L('desain tersimpan. Klik desain untuk membuka di editor.','designs saved. Click a design to open it in the editor.')}</p></div><div class="sp"></div>
+    <div class="ph"><div><h1>${L('Koleksi','Collection')}</h1><p>${state.designs.length} ${L('desain tersimpan. Klik desain untuk membuka di editor, cetak polanya, atau jadikan kerangka sketsa baru.','designs saved. Click a design to open it in the editor, print its pattern, or turn it into a frame for a new sketch.')}</p></div><div class="sp"></div>
       <div class="chips">${[['all',L('Semua','All')],['prot',L('Dilindungi','Protected')],['draft',L('Belum dilindungi','Unprotected')]].map(([k,l])=>`<button class="chip ${f===k?'on':''}" data-f="${k}">${l}</button>`).join('')}</div>
       <a class="btn primary" href="#/studio">${ico('sparkle')} ${L('Desain baru','New design')}</a></div>
-    ${list.length ? `<div class="gal stagger">${list.map(d=>designCard(d).replace('</div>\n  <b>',`</div><button class="del" data-del="${esc(d.id)}" aria-label="${L('Hapus','Delete')}">${ico('trash',16)}</button>\n  <b>`)).join('')}</div>`
+    ${tabs}
+    ${list.length ? `<div class="gal stagger">${list.map(d=>designCard(d).replace('</div>\n  <b>',`</div><button class="del" data-del="${esc(d.id)}" aria-label="${L('Hapus','Delete')}">${ico('trash',16)}</button>\n  <b>`).replace(/<\/small><\/div>$/,`</small><div class="dact"><button class="btn ghost sm" data-print="${esc(d.id)}">${ico('printer',14)} ${L('Cetak pola','Print')}</button><button class="btn ghost sm" data-skov="${esc(d.id)}">${ico('brush',14)} ${L('Sketsa ulang','Sketch over')}</button></div></div>`)).join('')}</div>`
       : `<div class="empty-sm">${state.designs.length ? L('Belum ada desain di filter ini.','No designs in this filter yet.') : L('Koleksi masih kosong. Simpan hasil dari Studio atau Editor.','The collection is empty. Save results from the Studio or Editor.')}</div>`}`;
   },
   bind(){
     bindOpen();
+    $$('[data-gtab]').forEach(b=>b.addEventListener('click',()=>{ pages.gallery.tab=b.dataset.gtab; go(); }));
+    const skById=id=>state.sketches.find(x=>x.id===id);
+    const editSketch=async sk=>{
+      const r=await sketchModal(sk?sk.strokes:null, sk?{base:sk.base, baseAlpha:sk.baseAlpha, id:sk.id, name:sk.name, from:sk.from}:{});
+      if(r) useSketchInStudio({image:r.dataURL, strokes:r.strokes, base:sk?sk.base:null, baseAlpha:r.baseAlpha, id:r.id, name:r.name});
+      else go();   // refresh: it may have been saved
+    };
+    $('#sk-new')?.addEventListener('click',()=>editSketch(null));
+    $$('[data-skedit]').forEach(el=>el.addEventListener('click',e=>{
+      if(e.target.closest('[data-skuse],[data-skdel]') || (el.classList.contains('skcard') && e.target.closest('button'))) return;
+      e.stopPropagation(); const sk=skById(el.dataset.skedit); if(sk) editSketch(sk); }));
+    $$('[data-skuse]').forEach(b=>b.addEventListener('click',e=>{ e.stopPropagation(); const sk=skById(b.dataset.skuse); if(sk) useSketchInStudio(sk); }));
+    $$('[data-skdel]').forEach(b=>b.addEventListener('click',async e=>{ e.stopPropagation(); const sk=skById(b.dataset.skdel);
+      if(!sk || !await confirmModal(L(`Hapus sketsa “${sk.name}”?`,`Delete the sketch “${sk.name}”?`))) return;
+      try{ await deleteSketch(sk.id); toast(L('Sketsa dihapus','Sketch deleted')); go(); }catch(err){ toast(err.message,true); } }));
     $$('[data-f]').forEach(b=>b.addEventListener('click',()=>{ pages.gallery.filter=b.dataset.f; go(); }));
+    $$('[data-print]').forEach(b=>b.addEventListener('click',()=>{ const d=state.designs.find(x=>x.id===b.dataset.print); if(d) tracingModal(d); }));
+    $$('[data-skov]').forEach(b=>b.addEventListener('click',()=>{ const d=state.designs.find(x=>x.id===b.dataset.skov); if(d) sketchFromDesign(d,b); }));
     $$('[data-del]').forEach(b=>b.addEventListener('click',async e=>{ e.stopPropagation();
       const d=state.designs.find(x=>x.id===b.dataset.del);
       if(!await confirmModal(L(`Hapus “${dn(d)}” dari koleksi?`,`Delete “${dn(d)}” from the collection?`))) return;
@@ -753,6 +806,7 @@ function go(){
   page.bind && page.bind();
   let asked=true; try{ asked=!!localStorage.getItem('canting-key-asked'); }catch(e){}
   if(!page.public && !asked && aiMode()==='mock' && !$('.modal-bg')) keyModal({onSaved:()=>refreshStatus().then(go)});
+  if(typeof buddySync==='function') buddySync();
 }
 function nav(r){
   route = r;

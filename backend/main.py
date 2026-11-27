@@ -10,6 +10,7 @@ import asyncio
 import base64
 import io
 import os
+import re
 import time
 from pathlib import Path
 
@@ -378,6 +379,75 @@ async def lineart(body: LineArtIn, x_gemini_key: str | None = Header(default=Non
             raise HTTPException(502, str(e))
     ms = int((time.perf_counter() - t0) * 1000)
     return image_out(png, ms=ms, mock=ai.is_mock(x_gemini_key))
+
+
+# ---------------------------------------------------------------- Tanya Canting (design discussion friend)
+class BuddyContext(BaseModel):
+    page: str = Field(default="", max_length=40)
+    design_name: str = Field(default="", max_length=120)
+    motif: str = Field(default="", max_length=80)
+    design_image: str | None = None     # data URL of the open design, sent with the newest message
+    auto_edit: bool = False             # the user allowed Canting to apply [[EDIT]] suggestions by itself
+
+
+class BuddyIn(BaseModel):
+    messages: list[ChatMsg] = Field(default_factory=list, max_length=40)
+    context: BuddyContext = Field(default_factory=BuddyContext)
+    shop: str = Field(default="Batik UMKM", max_length=80)
+    lang: str = "id"
+
+
+ACTION_RE = re.compile(r"\[\[\s*(STUDIO|EDIT)\s*:\s*(.+?)\s*\]\]", re.S | re.I)
+
+
+def split_actions(text: str, has_design: bool) -> tuple[str, list[dict]]:
+    """Pull the [[STUDIO: …]] / [[EDIT: …]] suggestions out of the reply text."""
+    actions, seen = [], set()
+    for kind, val in ACTION_RE.findall(text):
+        kind = kind.lower()
+        if kind in seen or (kind == "edit" and not has_design):
+            continue
+        seen.add(kind)
+        actions.append({"type": kind, "text": val.strip()})
+    return ACTION_RE.sub("", text).strip(), actions
+
+
+@app.post("/api/buddy")
+async def buddy(body: BuddyIn, x_gemini_key: str | None = Header(default=None)):
+    lang = "en" if body.lang == "en" else "id"
+    ctx = body.context
+    if not any(m.role == "user" for m in body.messages):
+        raise HTTPException(400, "Tulis pesan dulu.")
+    if ai.is_mock(x_gemini_key):
+        await asyncio.sleep(0.6)
+        reply = ("Ide menarik, Kak! (Mode mock: ini jawaban contoh. Masukkan API key untuk ngobrol sungguhan dengan Gemini.) "
+                 "Bagaimana kalau dicoba versi Truntum dengan bunga melati kecil dan warna soga yang lembut?"
+                 if lang == "id" else
+                 "Nice idea! (Mock mode: this is a sample reply. Add an API key to really chat with Gemini.) "
+                 "How about trying a Truntum version with small jasmine flowers in soft soga colours?")
+        acts = [{"type": "studio", "text": "Truntum dengan bunga melati kecil, warna soga lembut" if lang == "id"
+                 else "Truntum with small jasmine flowers in soft soga colours"}]
+        return {"reply": reply, "actions": acts, "grounding": None, "mock": True}
+
+    msgs = [(m.role, m.text, decode_data_url(m.image) if m.image else None) for m in body.messages]
+    while msgs and msgs[0][0] == "model":  # Gemini wants the conversation to start with the user
+        msgs.pop(0)
+    has_design = bool(ctx.design_image)
+    if has_design:  # attach the open design to the newest message
+        role, text, img = msgs[-1]
+        label = f"[Current design: {ctx.design_name or 'untitled'}]"
+        if img is None:
+            msgs[-1] = (role, f"{label}\n{text}", decode_data_url(ctx.design_image))
+        else:
+            msgs.insert(len(msgs) - 1, ("user", label, decode_data_url(ctx.design_image)))
+    system = prompts.buddy_system(lang, body.shop, ctx.page, ctx.design_name if has_design else "", ctx.motif,
+                                  auto_edit=ctx.auto_edit and has_design)
+    try:
+        text, grounding = await ai.buddy(system, msgs, api_key=x_gemini_key)
+    except AIError as e:
+        raise HTTPException(502, str(e))
+    reply, actions = split_actions(text, has_design)
+    return {"reply": reply or "…", "actions": actions, "grounding": grounding, "mock": False}
 
 
 # ---------------------------------------------------------------- static (local only; on Vercel the CDN serves public/)

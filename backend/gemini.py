@@ -168,6 +168,30 @@ class GeminiAI:
         except Exception as e:
             raise AIError("Jawaban asisten tidak terbaca. Coba kirim ulang pesannya.") from e
 
+    async def buddy(self, system: str, messages: list[tuple[str, str, bytes | None]], api_key: str | None = None,
+                    grounding: bool = True) -> tuple[str, dict | None]:
+        """Free-form design discussion (Tanya Canting). Can look things up with Google Search.
+        Returns (reply text, grounding info or None)."""
+        from google.genai import types
+        contents = []
+        for role, text, img in messages:
+            parts = []
+            if img:
+                img = _shrink(img)
+                parts.append(types.Part.from_bytes(data=img, mime_type=_mime(img)))
+            parts.append(types.Part.from_text(text=text or "(gambar)"))
+            contents.append(types.Content(role="model" if role == "model" else "user", parts=parts))
+        config = types.GenerateContentConfig(system_instruction=system)
+        if grounding:
+            config.tools = [types.Tool(google_search=types.GoogleSearch())]
+        client = self._client(api_key)
+        try:
+            resp = await client.aio.models.generate_content(model=self.text_model, contents=contents, config=config)
+        except Exception as e:
+            raise AIError(_friendly(e)) from e
+        cand = (resp.candidates or [None])[0]
+        return (resp.text or "").strip(), (_grounding(cand) if cand else None)
+
 
 def _grounding(cand) -> dict | None:
     """Search queries and source pages from a grounded answer, for attribution in the UI."""
